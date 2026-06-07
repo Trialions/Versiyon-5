@@ -161,6 +161,12 @@ class Backtester:
         self.qs_enabled   = bool(qs.get("enabled",       True))
         self.qs_min_half  = int( qs.get("min_half_pos",  5))
         self.qs_min_full  = int( qs.get("min_full_pos",  7))
+        ar = cfg.get("adaptive_risk", {})
+        self.ar_enabled       = bool( ar.get("enabled",        True))
+        self.ar_loss3_mult    = float(ar.get("loss3_mult",     0.75))
+        self.ar_loss5_mult    = float(ar.get("loss5_mult",     0.50))
+        self.ar_loss8_mult    = float(ar.get("loss8_mult",     0.25))
+        self._consec_losses   = 0
         self.sym_mgr  = SymbolManager(cfg)
         self.regime   = MarketRegimeDetector(cfg)
 
@@ -400,6 +406,13 @@ class Backtester:
         qty = self._lot(price, sl_pct=final_sl)
         qty *= self.sym_mgr.size_multiplier(symbol)
         qty *= self.regime.size_multiplier()
+        if self.ar_enabled:
+            if self._consec_losses >= 8:
+                qty *= self.ar_loss8_mult
+            elif self._consec_losses >= 5:
+                qty *= self.ar_loss5_mult
+            elif self._consec_losses >= 3:
+                qty *= self.ar_loss3_mult
         if qs < self.qs_min_full:
             qty *= 0.5
         comp = result.get("components", {})
@@ -467,6 +480,11 @@ class Backtester:
 
         if not partial:
             self.sym_mgr.record_trade(symbol, net)
+        if not partial and self.ar_enabled:
+            if net < 0:
+                self._consec_losses += 1
+            else:
+                self._consec_losses = 0
 
     def force_close_all(self, last_prices):
         for sym, pos in list(self.open_positions.items()):
