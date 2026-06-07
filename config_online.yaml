@@ -56,6 +56,11 @@ quality_score:
   enabled: true
   min_half_pos: 5
   min_full_pos: 7
+adaptive_risk:
+  enabled: true
+  loss3_mult: 0.75
+  loss5_mult: 0.50
+  loss8_mult: 0.25
 auto_symbol_filter:
   enabled: true
   rolling_window: 10
