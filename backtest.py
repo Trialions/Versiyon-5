@@ -208,6 +208,16 @@ class Backtester:
         self.qs_min_half     = float(qs.get("min_half_pos", 5.0))
         self.qs_min_full     = float(qs.get("min_full_pos", 6.0))
         self._consec_losses   = 0
+        qs = cfg.get("quality_score", {})
+        self.qs_enabled   = bool( qs.get("enabled",      False))
+        self.qs_min_half  = float(qs.get("min_half_pos",  5.0))
+        self.qs_min_full  = float(qs.get("min_full_pos",  6.0))
+
+        ar = cfg.get("adaptive_risk", {})
+        self.ar_enabled    = bool( ar.get("enabled",     False))
+        self.ar_loss3_mult = float(ar.get("loss3_mult",  0.75))
+        self.ar_loss5_mult = float(ar.get("loss5_mult",  0.50))
+        self.ar_loss8_mult = float(ar.get("loss8_mult",  0.25))
         self.sym_mgr  = SymbolManager(cfg)
         self.regime   = MarketRegimeDetector(cfg)
 
@@ -219,6 +229,7 @@ class Backtester:
         self.last_day         = ""
         self.daily_fired      = False
         self.equity_curve     = [(0, self.starting_equity)]
+        self.consecutive_losses = 0
 
     def _lot(self, price, sl_pct=None):
         sl_pct    = sl_pct or self.sl_pct
@@ -448,9 +459,35 @@ class Backtester:
         qs = self._quality_score(symbol, result, side)
         if qs < self.qs_min_half:
             return
+        if self.qs_enabled:
+            qs_pts = 0
+            comp   = result.get("components", {})
+            atr_pct_v = comp.get("atr_pct", 0.0)
+            if 0.3 <= atr_pct_v <= 3.0:          qs_pts += 1
+            rsi_v = comp.get("rsi", 50.0)
+            if side == "LONG"  and rsi_v >= 55:   qs_pts += 2
+            elif side == "SHORT" and rsi_v <= 45: qs_pts += 2
+            macd_v = comp.get("macd", 50.0)
+            if side == "LONG"  and macd_v >= 55:  qs_pts += 2
+            elif side == "SHORT" and macd_v <= 45:qs_pts += 2
+            regime_name = self.regime._last_regime
+            if regime_name == "TREND":            qs_pts += 2
+            elif regime_name == "KONSOL":         qs_pts += 1
+            vol_v = comp.get("volume", 50.0)
+            if vol_v >= 60.0:                     qs_pts += 1
+            if qs_pts < self.qs_min_half:
+                return   # kalite çok düşük → işlem yok
+            qs_size_mult = 1.0 if qs_pts >= self.qs_min_full else 0.5
+
         qty = self._lot(price, sl_pct=final_sl)
         qty *= self.sym_mgr.size_multiplier(symbol)
         qty *= self.regime.size_multiplier()
+        if self.qs_enabled:
+            qty *= qs_size_mult
+        if self.ar_enabled:
+            if   self.consecutive_losses >= 8: qty *= self.ar_loss8_mult
+            elif self.consecutive_losses >= 5: qty *= self.ar_loss5_mult
+            elif self.consecutive_losses >= 3: qty *= self.ar_loss3_mult
         if self.ar_enabled:
             if self._consec_losses >= 8:
                 qty *= self.ar_loss8_mult
@@ -525,6 +562,11 @@ class Backtester:
 
         if not partial:
             self.sym_mgr.record_trade(symbol, net)
+        if not partial:
+            if net < 0:
+                self.consecutive_losses += 1
+            else:
+                self.consecutive_losses = 0
         if not partial and self.ar_enabled:
             if net < 0:
                 self._consec_losses += 1
