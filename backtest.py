@@ -86,6 +86,42 @@ def fetch_klines(symbol, interval, start_ms, end_ms):
             break
     return candles
 
+def fetch_funding_rates(symbol: str, start_ms: int, end_ms: int) -> dict:
+    """8 saatlik funding rate geçmişi. {timestamp_ms: rate} dict döner."""
+    url  = "https://fapi.binance.com/fapi/v1/fundingRate"
+    out  = {}
+    cur  = start_ms
+    while cur < end_ms:
+        try:
+            r = requests.get(url, params={
+                "symbol": symbol, "startTime": cur,
+                "endTime": end_ms, "limit": 1000,
+            }, timeout=10)
+            r.raise_for_status()
+            batch = r.json()
+            if not batch:
+                break
+            for item in batch:
+                out[item["fundingTime"]] = float(item["fundingRate"])
+            cur = batch[-1]["fundingTime"] + 1
+            if len(batch) < 1000:
+                break
+            time.sleep(REQUEST_DELAY)
+        except Exception as e:
+            log_error(f"Funding rate {symbol}: {e}")
+            break
+    return out
+
+
+def _get_funding_at(funding_map: dict, ts_ms: int) -> float:
+    """Verilen zaman damgasına en yakın önceki funding rate'i döner."""
+    if not funding_map:
+        return 0.0
+    keys = [k for k in funding_map if k <= ts_ms]
+    if not keys:
+        return 0.0
+    return funding_map[max(keys)]
+
 
 def _max_drawdown(equity_curve):
     if not equity_curve:
@@ -161,6 +197,11 @@ class Backtester:
         self.qs_enabled   = bool(qs.get("enabled",       True))
         self.qs_min_half  = int( qs.get("min_half_pos",  5))
         self.qs_min_full  = int( qs.get("min_full_pos",  7))
+        fr = cfg.get("funding_filter", {})
+        self.fr_enabled    = bool( fr.get("enabled",     True))
+        self.fr_long_max   = float(fr.get("long_max",    0.0005))
+        self.fr_short_min  = float(fr.get("short_min",  -0.0005))
+        self._funding_map  = {}
         ar = cfg.get("adaptive_risk", {})
         self.ar_enabled       = bool( ar.get("enabled",        True))
         self.ar_loss3_mult    = float(ar.get("loss3_mult",     0.75))
