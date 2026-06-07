@@ -401,6 +401,10 @@ class Backtester:
 
         # ── Yeni pozisyon kontrol kapıları ─────────────────────
         if not self.regime.is_open():                     return
+        if self.fr_enabled and self._funding_map:
+            fr = _get_funding_at(self._funding_map, ts_ms)
+            if side == "LONG"  and fr >  self.fr_long_max:  return
+            if side == "SHORT" and fr <  self.fr_short_min: return
         if len(self.open_positions) >= self.max_open_pos: return
         if self.trade_count_day >= self.max_trades_day:   return
         if self._daily_target_hit():                      return
@@ -865,6 +869,11 @@ def run_backtest(symbols, interval, days, cfg, out_dir,
                              save_best_to=save_config,
                              oos_split=0.70 if oos else 1.0)
         return
+            # BTC funding rate geçmişini çek
+    print(f"  BTC funding rate yükleniyor...")
+    funding_map = fetch_funding_rates("BTCUSDT", start_ms, end_ms)
+    print(f"  {len(funding_map)} funding kaydı yüklendi")
+
 
     print(f"\n  Zaman ekseni olusturuluyor...")
     timeline = []
@@ -881,7 +890,8 @@ def run_backtest(symbols, interval, days, cfg, out_dir,
     low_buf   = {s: deque(maxlen=WINDOW) for s in all_candles}
     vol_buf   = {s: deque(maxlen=WINDOW) for s in all_candles}
 
-    bt          = Backtester(cfg)
+    bt = Backtester(cfg)
+    bt._funding_map = funding_map
     last_prices = {}
     processed   = 0
 
