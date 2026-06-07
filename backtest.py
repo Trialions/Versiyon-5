@@ -259,6 +259,16 @@ class Backtester:
         # BTC trend uyumu +2
         if self._btc_trend_ok(side): score += 2
 
+        regime = self.regime._last_regime
+        if regime == "TREND":
+            self.qs_min_half = 4
+            self.qs_min_full = 5
+        elif regime == "BEARISH":
+            self.qs_min_half = 7
+            self.qs_min_full = 9
+        else:  # KONSOL
+            self.qs_min_half = 5
+            self.qs_min_full = 7
         return score
     
     def _exit_reason(self, pos, price, change, score):
