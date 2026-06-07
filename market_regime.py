@@ -119,9 +119,12 @@ class MarketRegimeDetector:
                 vol_strong = recent_vol / base_vol >= self.vol_burst_mult
 
         # ── Rejim kararı ─────────────────────────────────────
-        # BEARISH: fiyat EMA200 altında
+        # BEARISH: fiyat EMA200 altında VEYA çok düşük volatilite (sıkışma)
         if bearish_ema:
             regime = self.BEARISH
+        elif atr_percentile < 20:
+            # Çok düşük volatilite → sıkışma, breakout yok, işlem alma
+            regime = self.KONSOL
 
         # TREND: tam ema sırası + yüksek ATR değil + hacim destekliyor
         elif full_trend and not atr_chaotic:
@@ -151,6 +154,7 @@ class MarketRegimeDetector:
             "bearish_ema":  bearish_ema,
             "atr_chaotic":  atr_chaotic,
             "vol_strong":   vol_strong,
+            "atr_percentile": round(atr_percentile, 1),
         }
         return regime
 
