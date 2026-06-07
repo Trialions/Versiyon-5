@@ -61,6 +61,10 @@ adaptive_risk:
   loss3_mult: 0.75
   loss5_mult: 0.50
   loss8_mult: 0.25
+funding_filter:
+  enabled: true
+  long_max: 0.0005
+  short_min: -0.0005
 auto_symbol_filter:
   enabled: true
   rolling_window: 10
