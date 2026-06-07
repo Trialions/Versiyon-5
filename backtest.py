@@ -239,8 +239,8 @@ class Backtester:
 
         # HTF uyumu +2
         htf = comp.get("htf_score", 50.0)
-        if side == "LONG"  and htf >= self.mtf_long_min:  score += 2
-        if side == "SHORT" and htf <= self.mtf_short_max: score += 2
+        if side == "LONG"  and htf >= 55: score += 2
+        if side == "SHORT" and htf <= 45: score += 2
 
         # Volatilite uygun +2 (ATR ne çok düşük ne çok yüksek)
         atr_pct = comp.get("atr_pct", 0.0)
