@@ -52,6 +52,10 @@ partial_tp:
   enabled: true
   tp1_r_mult: 1
   close_pct: 0.5
+quality_score:
+  enabled: true
+  min_half_pos: 5
+  min_full_pos: 7
 auto_symbol_filter:
   enabled: true
   rolling_window: 10
