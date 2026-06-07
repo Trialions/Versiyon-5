@@ -89,12 +89,12 @@ class MarketRegimeDetector:
         bearish_ema  = price < ema_l
 
         # ── Katman 2: ATR volatilite ─────────────────────────
-        atr_chaotic = False
+        atr_chaotic   = False
+        atr_percentile = 50.0  # varsayılan
         if btc_highs and btc_lows and len(btc_highs) >= self.atr_period + 1:
             h = np.array(btc_highs[-self.atr_period*3:], dtype=float)
             l = np.array(btc_lows[-self.atr_period*3:],  dtype=float)
             c = arr[-self.atr_period*3:]
-            # Rolling ATR hesapla
             trs = []
             for i in range(1, len(c)):
                 tr = max(h[i]-l[i], abs(h[i]-c[i-1]), abs(l[i]-c[i-1]))
@@ -104,7 +104,12 @@ class MarketRegimeDetector:
                 base_atr   = float(np.mean(trs[-self.atr_period*2:-self.atr_period]))
                 if base_atr > 0:
                     atr_chaotic = recent_atr / base_atr > self.atr_mult_thresh
-
+                # ATR percentile — son 100 TR içindeki sırası
+                if len(trs) >= 20:
+                    window = trs[-100:] if len(trs) >= 100 else trs
+                    atr_percentile = float(
+                        sum(1 for x in window if x <= recent_atr) / len(window) * 100
+                    )
         # ── Katman 3: Hacim momentum ─────────────────────────
         vol_strong = False
         if btc_vols and len(btc_vols) >= self.vol_window + 3:
