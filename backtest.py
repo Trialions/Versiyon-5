@@ -17,6 +17,7 @@ from collections import defaultdict
 from strategy_core import score_symbol
 from logger import log_info, log_error
 from symbol_manager import SymbolManager
+from market_regime import MarketRegimeDetector
 
 import os as _os
 _SCRIPT_DIR = _os.path.dirname(_os.path.abspath(__file__))
@@ -156,7 +157,8 @@ class Backtester:
         self.ptp_enabled   = bool( ptp.get("enabled",    True))
         self.ptp_r_mult    = float(ptp.get("tp1_r_mult", 0.75))
         self.ptp_close_pct = float(ptp.get("close_pct",  0.50))
-        self.sym_mgr = SymbolManager(cfg)
+        self.sym_mgr  = SymbolManager(cfg)
+        self.regime   = MarketRegimeDetector(cfg)
 
         self.btc_closes       = []
         self.open_positions   = {}
@@ -243,8 +245,14 @@ class Backtester:
 
         if symbol == "BTCUSDT":
             self.btc_closes.append(price)
-            if len(self.btc_closes) > 200:
-                self.btc_closes = self.btc_closes[-200:]
+            if len(self.btc_closes) > 500:
+                self.btc_closes = self.btc_closes[-500:]
+            self.regime.detect(
+                self.btc_closes,
+                btc_highs=list(highs)   if highs   else None,
+                btc_lows =list(lows)    if lows    else None,
+                btc_vols =list(volumes) if volumes else None,
+            )
 
         self._reset_day(ts_ms)
 
@@ -296,6 +304,7 @@ class Backtester:
             return
 
         # ── Yeni pozisyon kontrol kapıları ─────────────────────
+        if not self.regime.is_open():                     return
         if len(self.open_positions) >= self.max_open_pos: return
         if self.trade_count_day >= self.max_trades_day:   return
         if self._daily_target_hit():                      return
@@ -338,6 +347,7 @@ class Backtester:
 
         qty = self._lot(price, sl_pct=final_sl)
         qty *= self.sym_mgr.size_multiplier(symbol)
+        qty *= self.regime.size_multiplier()
         comp = result.get("components", {})
         vol_ratio = round(volumes[-1] / (sum(volumes[-20:-1]) / 19), 2) if len(volumes) >= 20 else 0.0
         self.open_positions[symbol] = {
