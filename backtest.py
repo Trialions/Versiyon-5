@@ -157,6 +157,10 @@ class Backtester:
         self.ptp_enabled   = bool( ptp.get("enabled",    True))
         self.ptp_r_mult    = float(ptp.get("tp1_r_mult", 0.75))
         self.ptp_close_pct = float(ptp.get("close_pct",  0.50))
+        qs = cfg.get("quality_score", {})
+        self.qs_enabled   = bool(qs.get("enabled",       True))
+        self.qs_min_half  = int( qs.get("min_half_pos",  5))
+        self.qs_min_full  = int( qs.get("min_full_pos",  7))
         self.sym_mgr  = SymbolManager(cfg)
         self.regime   = MarketRegimeDetector(cfg)
 
@@ -221,7 +225,42 @@ class Backtester:
         if side == "SHORT" and chg >=  self.btc_filter_drop_pct:
             return False
         return True
+    def _quality_score(self, symbol: str, result: dict, side: str) -> int:
+        """
+        0-10 arası kalite puanı.
+        < qs_min_half  → işlem yok
+        qs_min_half..qs_min_full → yarım pozisyon (qty * 0.5)
+        >= qs_min_full → tam pozisyon
+        """
+        if not self.qs_enabled:
+            return 10
+        score = 0
+        comp  = result.get("components", {})
 
+        # HTF uyumu +2
+        htf = comp.get("htf_score", 50.0)
+        if side == "LONG"  and htf >= self.mtf_long_min:  score += 2
+        if side == "SHORT" and htf <= self.mtf_short_max: score += 2
+
+        # Volatilite uygun +2 (ATR ne çok düşük ne çok yüksek)
+        atr_pct = comp.get("atr_pct", 0.0)
+        if 0.3 <= atr_pct <= 3.0: score += 2
+
+        # Rejim bullish +2
+        regime = self.regime._last_regime
+        if regime == "TREND":  score += 2
+        elif regime == "KONSOL": score += 1
+
+        # Hacim artışı +2
+        vol_ratio = comp.get("volume", 50.0)
+        if vol_ratio >= 65: score += 2
+        elif vol_ratio >= 55: score += 1
+
+        # BTC trend uyumu +2
+        if self._btc_trend_ok(side): score += 2
+
+        return score
+    
     def _exit_reason(self, pos, price, change, score):
         pos_sl = pos.get("sl_pct", self.sl_pct)
         if change <= -pos_sl:
@@ -345,9 +384,14 @@ class Backtester:
         else:
             final_sl = self.sl_pct
 
+        qs = self._quality_score(symbol, result, side)
+        if qs < self.qs_min_half:
+            return
         qty = self._lot(price, sl_pct=final_sl)
         qty *= self.sym_mgr.size_multiplier(symbol)
         qty *= self.regime.size_multiplier()
+        if qs < self.qs_min_full:
+            qty *= 0.5
         comp = result.get("components", {})
         vol_ratio = round(volumes[-1] / (sum(volumes[-20:-1]) / 19), 2) if len(volumes) >= 20 else 0.0
         self.open_positions[symbol] = {
