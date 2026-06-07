@@ -1,0 +1,70 @@
+╔══════════════════════════════════════════════════════════════╗
+║           KRİPTO TRADE BOTU v4 — KURULUM REHBERİ           ║
+╚══════════════════════════════════════════════════════════════╝
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ HAZIRLIK (Sadece İlk Kurulumda)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ADIM 1 — Python Kur (daha önce kurulduysa atla)
+  → https://www.python.org/downloads/
+  → İndirip çalıştır, "Add Python to PATH" seçeneğini işaretle
+
+ADIM 2 — Tüm dosyaları aynı klasöre çıkar (örn: C:\KriptoBotu\)
+
+ADIM 3 — Sırayla çift tıkla:
+
+  [1_KURULUM.bat]        → Gerekli kütüphaneleri yükler
+  [2_SEMBOLLER.bat]      → Binance'ten sembol listesi indirir
+  [3_BAGLANTI_TEST.bat]  → Bağlantı sağlıklı mı kontrol eder
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ HER GÜNLÜK KULLANIM
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  [4_BOTU_CALISTIR.bat]  → Botu başlatır (pencere açılır)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ DOSYA AÇIKLAMALARI
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  config_online.yaml     → Ayarlar (risk, eşikler, limitler)
+  symbols_top70.json     → Takip edilen coin listesi
+  data/trade_logs.csv    → İşlem geçmişi (otomatik oluşur)
+  data/agent_summary_report.csv → Günlük rapor
+  logs/errors.log        → Hata günlüğü
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ ÖNEMLI NOTLAR
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  • Bu bot simülasyon modunda çalışır — gerçek emir GÖNDERMEZ
+  • config_online.yaml'daki "starting_equity_usdt" değerini
+    gerçek bakiyenle aynı yap (varsayılan: 1000 USDT)
+  • Makro sentiment için:
+      pip install tradingview-ta
+    komutu çalıştırılabilir (opsiyonel, yoksa NEUTRAL varsayılır)
+  • Gemini analizi için:
+      python ask_gemini.py
+    komutunu çalıştır
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ SORUN GİDERME
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  "python bulunamadı" hatası:
+    → Python'u yeniden kur, PATH seçeneğini işaretle
+
+  "ModuleNotFoundError" hatası:
+    → 1_KURULUM.bat tekrar çalıştır
+
+  Bot başlamıyor:
+    → logs\errors.log dosyasına bak
+    → 3_BAGLANTI_TEST.bat ile bağlantıyı kontrol et
+
+  Semboller güncellensin:
+    → 2_SEMBOLLER.bat tekrar çalıştır
+
+╔══════════════════════════════════════════════════════════════╗
+║  Sıra: 1_KURULUM → 2_SEMBOLLER → 3_TEST → 4_CALISTIR       ║
+╚══════════════════════════════════════════════════════════════╝

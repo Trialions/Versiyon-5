@@ -1,0 +1,1441 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kripto Trade Botu v6</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<script src="chart.umd.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0d0f12;--surf:#13161c;--surf2:#1a1f2e;--surf3:#222840;
+  --border:#ffffff0f;--border2:#ffffff18;
+  --acc:#00d4aa;--acc2:#3b82f6;--red:#ef4444;--amber:#f59e0b;
+  --text:#e2e8f0;--muted:#64748b;--muted2:#94a3b8;
+  --mono:'JetBrains Mono',monospace;--sans:'Inter',sans-serif;
+  --radius:8px;--radius-sm:5px;
+}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13px;height:100vh;overflow:hidden;display:flex;flex-direction:column}
+
+/* ── Titlebar ── */
+.titlebar{height:44px;background:var(--surf);border-bottom:0.5px solid var(--border);display:flex;align-items:center;padding:0 16px;gap:12px;flex-shrink:0;-webkit-app-region:drag;user-select:none}
+.tb-dots{display:flex;gap:5px}
+.tb-dot{width:11px;height:11px;border-radius:50%}
+.tb-dot.r{background:#ef4444}.tb-dot.y{background:#f59e0b}.tb-dot.g{background:#22c55e}
+.tb-title{font-size:12px;font-weight:500;color:var(--muted);flex:1;text-align:center}
+.tb-status{display:flex;align-items:center;gap:6px;font-size:11px;font-family:var(--mono);color:var(--acc)}
+.tb-dot-live{width:6px;height:6px;border-radius:50%}
+.tb-dot-live.on{background:var(--acc);animation:blink 1.5s ease-in-out infinite}
+.tb-dot-live.off{background:var(--muted)}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* ── Layout ── */
+.app{display:flex;flex:1;overflow:hidden}
+.sidebar{width:200px;background:var(--surf);border-right:0.5px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
+.nav-sec{font-size:9px;font-family:var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:1.5px;padding:14px 14px 4px}
+.nav-item{display:flex;align-items:center;gap:9px;padding:8px 14px;font-size:12px;color:var(--muted);cursor:pointer;border-left:2px solid transparent;transition:all .15s}
+.nav-item:hover{color:var(--text);background:#ffffff06}
+.nav-item.active{color:var(--text);background:#ffffff08;border-left-color:var(--acc)}
+.nav-item svg{width:15px;height:15px;flex-shrink:0;opacity:.7}
+.nav-item.active svg{opacity:1}
+.nav-bot{margin-top:auto;padding:12px 14px;border-top:0.5px solid var(--border);font-size:10px;font-family:var(--mono);color:var(--muted);line-height:1.8}
+.main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+
+/* ── Topbar ── */
+.topbar{height:44px;background:var(--surf);border-bottom:0.5px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 18px;flex-shrink:0}
+.page-title{font-size:13px;font-weight:600}
+.btn-row{display:flex;gap:6px}
+.btn{display:flex;align-items:center;gap:5px;font-size:11px;padding:5px 12px;border-radius:var(--radius-sm);cursor:pointer;border:0.5px solid var(--border2);background:var(--surf2);color:var(--muted2);font-family:var(--sans);transition:all .15s;white-space:nowrap}
+.btn:hover{color:var(--text);border-color:#ffffff30}
+.btn.green{background:#00d4aa14;color:var(--acc);border-color:#00d4aa35}.btn.green:hover{background:#00d4aa22}
+.btn.red{background:#ef444414;color:var(--red);border-color:#ef444435}.btn.red:hover{background:#ef444422}
+.btn.blue{background:#3b82f614;color:var(--acc2);border-color:#3b82f635}.btn.blue:hover{background:#3b82f622}
+.btn.amber{background:#f59e0b14;color:var(--amber);border-color:#f59e0b35}
+
+/* ── Pages — TEK mekanizma: .page gizli, aktif olan görünür ── */
+.page{flex:1;overflow-y:auto;padding:14px 16px;display:none;flex-direction:column;gap:12px}
+.page.active{display:flex}
+.page::-webkit-scrollbar{width:4px}
+.page::-webkit-scrollbar-thumb{background:#ffffff15;border-radius:2px}
+
+/* ── Panels ── */
+.panel{background:var(--surf);border:0.5px solid var(--border);border-radius:var(--radius);padding:14px 16px}
+.panel-title{font-size:10px;font-family:var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px}
+.metric-row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.metric{background:var(--surf2);border-radius:var(--radius-sm);padding:12px 14px}
+.metric-lbl{font-size:10px;font-family:var(--mono);color:var(--muted);margin-bottom:4px}
+.metric-val{font-size:21px;font-weight:600}
+.metric-sub{font-size:10px;color:var(--muted);margin-top:2px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+
+/* ── Colors ── */
+.green{color:var(--acc)}.red{color:var(--red)}.blue{color:var(--acc2)}.amber{color:var(--amber)}
+
+/* ── Badges ── */
+.badge{font-size:9px;padding:2px 6px;border-radius:3px;font-weight:500;font-family:var(--mono)}
+.badge.long{background:#00d4aa14;color:var(--acc)}.badge.short{background:#ef444414;color:var(--red)}
+.badge.tp{background:#00d4aa14;color:var(--acc)}.badge.sl{background:#ef444414;color:var(--red)}
+.badge.sc{background:#3b82f614;color:var(--acc2)}.badge.trail{background:#f59e0b14;color:var(--amber)}
+
+/* ── Positions ── */
+.pos-row{display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:0.5px solid var(--border)}
+.pos-row:last-child{border-bottom:none}
+.pos-sym{font-size:12px;font-weight:500;font-family:var(--mono)}
+.pos-meta{font-size:10px;color:var(--muted);font-family:var(--mono)}
+
+/* ── Score bars ── */
+.score-bar-wrap{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:0.5px solid var(--border)}
+.score-bar-wrap:last-child{border-bottom:none}
+.score-sym{font-size:11px;font-family:var(--mono);width:90px;flex-shrink:0}
+.score-track{flex:1;height:3px;background:#ffffff08;border-radius:2px}
+.score-fill{height:100%;border-radius:2px;transition:width .5s}
+.score-num{font-size:11px;font-family:var(--mono);width:36px;text-align:right}
+
+/* ── Log ── */
+.log-box{background:var(--bg);border:0.5px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;font-size:10px;font-family:var(--mono);line-height:1.9;height:180px;overflow-y:auto}
+.log-box::-webkit-scrollbar{width:3px}
+.log-box::-webkit-scrollbar-thumb{background:#ffffff10}
+.log-line{display:flex;gap:6px}
+.log-t{color:#ffffff25;flex-shrink:0}
+.log-open{color:var(--acc)}.log-close{color:var(--red)}.log-info{color:var(--muted2)}.log-warn{color:var(--amber)}.log-bt{color:var(--acc2)}
+
+/* ── PnL bars ── */
+.pnl-bar-row{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:0.5px solid var(--border)}
+.pnl-bar-row:last-child{border-bottom:none}
+.pnl-sym{font-size:10px;font-family:var(--mono);color:var(--muted);width:82px;flex-shrink:0}
+.pnl-track{flex:1;height:4px;background:#ffffff08;border-radius:2px}
+.pnl-fill{height:100%;border-radius:2px}
+.pnl-val{font-size:10px;font-family:var(--mono);width:48px;text-align:right}
+
+/* ── Table ── */
+table.trade-tbl{width:100%;border-collapse:collapse;font-size:11px}
+table.trade-tbl th{text-align:left;font-size:10px;font-weight:500;color:var(--muted);padding:5px 8px;border-bottom:0.5px solid var(--border);font-family:var(--mono)}
+table.trade-tbl td{padding:6px 8px;border-bottom:0.5px solid var(--border);font-family:var(--mono);color:var(--muted2)}
+table.trade-tbl tr:last-child td{border-bottom:none}
+table.trade-tbl tr:hover td{background:#ffffff04}
+
+/* ── Form ── */
+.form-row{display:flex;flex-direction:column;gap:4px;margin-bottom:10px}
+.form-label{font-size:10px;font-family:var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+.form-input{background:var(--bg);border:0.5px solid var(--border2);border-radius:var(--radius-sm);padding:7px 10px;color:var(--text);font-size:12px;font-family:var(--mono);outline:none;width:100%}
+.form-input:focus{border-color:#ffffff30}
+select.form-input option{background:var(--surf)}
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+
+/* ── Config ── */
+.config-section-title{font-size:10px;font-family:var(--mono);color:var(--acc);text-transform:uppercase;letter-spacing:1px;padding-bottom:6px;border-bottom:0.5px solid var(--border);margin-bottom:10px;margin-top:14px}
+.config-section-title:first-child{margin-top:0}
+.config-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:4px}
+
+/* ── Blacklist ── */
+.bl-row{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+.bl-input{flex:1}
+
+/* ── Progress ── */
+.progress-wrap{margin-top:10px}
+.progress-lbl{display:flex;justify-content:space-between;font-size:10px;font-family:var(--mono);color:var(--muted);margin-bottom:5px}
+.progress-track{height:4px;background:#ffffff08;border-radius:2px;overflow:hidden}
+.progress-fill{height:100%;background:var(--acc2);border-radius:2px;transition:width .5s}
+
+/* ── Walk-Forward ── */
+#page-walkforward{padding:14px;overflow-y:auto}
+#page-walkforward.active{display:flex;flex-direction:row;gap:12px;padding:0;overflow:hidden}
+.wf-item{background:var(--color-background-secondary);border-radius:8px;padding:9px 11px;cursor:pointer;border:0.5px solid transparent;font-size:11px;margin-bottom:6px}
+.wf-item:hover,.wf-item.selected{border-color:var(--color-border-secondary)}
+.wf-item .wf-date{color:var(--color-text-tertiary);font-size:10px;margin-bottom:3px}
+.wf-item .wf-pnl{font-weight:600}
+.wf-card{background:var(--color-background-secondary);border-radius:8px;padding:11px 13px}
+.wf-card .wc-l{font-size:10px;color:var(--color-text-tertiary);margin-bottom:3px}
+.wf-card .wc-v{font-size:16px;font-weight:600}
+/* ── Backtest ── */
+.bt-layout{display:grid;grid-template-columns:260px 1fr;height:100%;overflow:hidden}
+.bt-sidebar{background:var(--surf);border-right:0.5px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
+.bt-sidebar-header{padding:10px 14px;border-bottom:0.5px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.bt-sidebar-title{font-size:10px;font-family:var(--mono);color:var(--muted);text-transform:uppercase;letter-spacing:1px}
+.bt-count{font-size:10px;font-family:var(--mono);color:var(--muted);background:var(--surf2);padding:2px 7px;border-radius:10px}
+.bt-list{overflow-y:auto;flex:1}
+.bt-list::-webkit-scrollbar{width:3px}
+.bt-list::-webkit-scrollbar-thumb{background:#ffffff10}
+.bt-item{padding:10px 14px;border-bottom:0.5px solid var(--border);cursor:pointer;transition:background .15s;position:relative}
+.bt-item:hover{background:#ffffff05}
+.bt-item.active{background:#00d4aa08;border-left:2px solid var(--acc)}
+.bt-item-date{font-size:10px;font-family:var(--mono);color:var(--muted2);margin-bottom:3px;display:flex;align-items:center;gap:5px}
+.bt-item-params{font-size:10px;font-family:var(--mono);color:var(--muted);margin-bottom:5px}
+.bt-item-metrics{display:flex;gap:5px;flex-wrap:wrap}
+.bt-badge{font-size:9px;font-family:var(--mono);padding:2px 5px;border-radius:3px}
+.bt-badge.pos{background:#00d4aa14;color:var(--acc)}.bt-badge.neg{background:#ef444414;color:var(--red)}
+.bt-badge.neu{background:#3b82f614;color:var(--acc2)}.bt-badge.run{background:#f59e0b14;color:var(--amber)}
+.bt-del{position:absolute;top:8px;right:8px;font-size:10px;color:var(--muted);cursor:pointer;opacity:0;transition:opacity .15s;background:var(--surf2);border:0.5px solid var(--border);border-radius:3px;padding:2px 5px}
+.bt-item:hover .bt-del{opacity:1}
+.bt-new-btn{margin:10px 14px;padding:7px;background:#3b82f614;border:0.5px solid #3b82f635;border-radius:6px;color:var(--acc2);font-size:11px;font-family:var(--mono);cursor:pointer;text-align:center;transition:background .15s}
+.bt-new-btn:hover{background:#3b82f622}
+.bt-right{flex:1;overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:12px}
+.bt-right::-webkit-scrollbar{width:3px}
+.bt-right::-webkit-scrollbar-thumb{background:#ffffff10}
+.new-test-form{background:var(--surf);border:0.5px solid var(--border);border-radius:var(--radius);padding:14px 16px}
+.cfg-snap-row{display:flex;justify-content:space-between;padding:4px 0;border-bottom:0.5px solid var(--border);font-size:10px;font-family:var(--mono)}
+.cfg-snap-row:last-child{border-bottom:none}
+.cfg-snap-lbl{color:var(--muted)}.cfg-snap-val{color:var(--muted2);font-weight:500}.cfg-snap-val.hi{color:var(--acc)}
+
+/* ── Backtest page özel: padding yok, tam ekran layout ── */
+#page-backtest{padding:0;flex-direction:row;overflow:hidden}
+#page-backtest.active{display:flex}
+</style>
+</head>
+<body>
+
+<!-- Titlebar -->
+<div class="titlebar">
+  <div class="tb-dots">
+    <div class="tb-dot r"></div><div class="tb-dot y"></div><div class="tb-dot g"></div>
+  </div>
+  <div class="tb-title">Kripto Trade Botu — v6</div>
+  <div class="tb-status">
+    <div class="tb-dot-live off" id="live-dot"></div>
+    <span id="tb-status-text">Durduruldu</span>
+  </div>
+</div>
+
+<div class="app">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="nav-sec">Ana</div>
+    <div class="nav-item active" data-page="dashboard">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      Genel Bakış
+    </div>
+    <div class="nav-item" data-page="positions">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>
+      Pozisyonlar
+    </div>
+    <div class="nav-item" data-page="log">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      Canlı Log
+    </div>
+    <div class="nav-sec">Analiz</div>
+    <div class="nav-item" data-page="backtest">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+      Backtest
+    </div>
+    <div class="nav-item" data-page="stats">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+      İstatistikler
+    </div>
+    <div class="nav-item" data-page="walkforward">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+      Walk-Forward
+    </div>
+    <div class="nav-sec">Sistem</div>
+    <div class="nav-item" data-page="blacklist">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+      Kara Liste
+    </div>
+    <div class="nav-item" data-page="config">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      Config
+    </div>
+    <div class="nav-bot" id="nav-bot-info">WS: —<br>Preload: —<br>—</div>
+  </div>
+
+  <!-- Main -->
+  <div class="main">
+    <!-- Topbar -->
+    <div class="topbar">
+      <span class="page-title" id="page-title">Genel Bakış</span>
+      <div class="btn-row">
+        <button class="btn" onclick="updateSymbols()">↻ Sembolleri Güncelle</button>
+        <button class="btn" id="btn-agent" onclick="toggleAgent()">Agent: Kapalı</button>
+        <button class="btn" onclick="runOptimize()">⚡ Optimize Et</button>
+        <button class="btn red" onclick="stopBot()">■ Durdur</button>
+        <button class="btn green" onclick="startBot()">▶ Başlat</button>
+      </div>
+    </div>
+
+    <!-- ═══ DASHBOARD ═══ -->
+    <div class="page active" id="page-dashboard">
+      <div class="metric-row">
+        <div class="metric"><div class="metric-lbl">Toplam PnL</div><div class="metric-val green" id="m-pnl">$0.00</div><div class="metric-sub" id="m-pnl-pct">%0.000</div></div>
+        <div class="metric"><div class="metric-lbl">Bugün</div><div class="metric-val" id="m-daily">$0.00</div><div class="metric-sub" id="m-daily-sub">—</div></div>
+        <div class="metric"><div class="metric-lbl">Açık Pozisyon</div><div class="metric-val blue" id="m-pos">0 / —</div><div class="metric-sub" id="m-pos-sub">—</div></div>
+        <div class="metric"><div class="metric-lbl">Equity</div><div class="metric-val" id="m-equity">$0.00</div><div class="metric-sub">Başlangıç bakiyesi</div></div>
+      </div>
+      <div class="grid2">
+        <div class="panel"><div class="panel-title">Açık Pozisyonlar</div><div id="pos-list"><div style="color:var(--muted);font-size:11px;font-family:var(--mono)">Pozisyon yok.</div></div></div>
+        <div class="panel"><div class="panel-title">Top-5 Skor</div><div id="top5-list"><div style="color:var(--muted);font-size:11px;font-family:var(--mono)">Veri toplanıyor...</div></div></div>
+      </div>
+      <div class="grid2">
+        <div class="panel"><div class="panel-title">Canlı Log (Son 10)</div><div class="log-box" id="dash-log"></div></div>
+        <div class="panel"><div class="panel-title">Bugün Coin PnL</div><div id="coin-pnl-list"><div style="color:var(--muted);font-size:11px;font-family:var(--mono)">Henüz veri yok.</div></div></div>
+      </div>
+    </div>
+
+    <!-- ═══ POZİSYONLAR ═══ -->
+    <div class="page" id="page-positions">
+      <div class="panel">
+        <div class="panel-title">Açık Pozisyonlar</div>
+        <table class="trade-tbl">
+          <thead><tr><th>Sembol</th><th>Yön</th><th>Giriş</th><th>Yaş (dk)</th><th>Trail %</th></tr></thead>
+          <tbody id="pos-table-body"><tr><td colspan="5" style="color:var(--muted);text-align:center;padding:16px">Pozisyon yok.</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ═══ CANLI LOG ═══ -->
+    <div class="page" id="page-log">
+      <div class="panel" style="flex:1">
+        <div class="panel-title">Canlı Log</div>
+        <div class="log-box" id="full-log" style="height:calc(100vh - 180px)"></div>
+      </div>
+    </div>
+
+    <!-- ═══ BACKTEST ═══ -->
+    <div class="page" id="page-backtest">
+      <div class="bt-layout" style="width:100%">
+        <!-- Sol sidebar -->
+        <div class="bt-sidebar">
+          <div class="bt-sidebar-header">
+            <span class="bt-sidebar-title">Geçmiş Testler</span>
+            <span class="bt-count" id="bt-hist-count">0</span>
+          </div>
+          <div class="bt-new-btn" onclick="showNewTest()">+ Yeni Backtest</div>
+          <div class="bt-list" id="bt-hist-list">
+            <div style="padding:14px;color:var(--muted);font-size:11px;font-family:var(--mono)">Henüz test yok.</div>
+          </div>
+        </div>
+        <!-- Sağ içerik -->
+        <div class="bt-right">
+          <div class="progress-wrap" id="bt-progress-wrap" style="display:none">
+            <div class="progress-lbl"><span id="bt-progress-lbl">Çalışıyor...</span><span id="bt-eta">—</span></div>
+            <div class="progress-track"><div class="progress-fill" id="bt-progress-fill" style="width:0%"></div></div>
+          </div>
+          <!-- Yeni Test Formu -->
+          <div id="bt-new-form">
+            <div class="new-test-form">
+              <div class="panel-title">Yeni Backtest</div>
+              <div class="form-grid">
+                <div class="form-row"><div class="form-label">Mod</div>
+                  <select class="form-input" id="bt-mode">
+                    <option value="normal">Normal Backtest</option>
+                    <option value="optimize">Parametre Optimizasyonu</option>
+                    <option value="opt_save">Optimizasyon + Config Kaydet</option>
+                    <option value="oos">Optimizasyon + OOS Test</option>
+                    <option value="oos_save">OOS + Config Kaydet</option>
+                  </select>
+                </div>
+                <div class="form-row"><div class="form-label">Mum Aralığı</div>
+                  <select class="form-input" id="bt-interval">
+                    <option value="1h">1 Saatlik</option>
+                    <option value="15m">15 Dakika</option>
+                    <option value="4h">4 Saatlik</option>
+                    <option value="5m">5 Dakika</option>
+                  </select>
+                </div>
+                <div class="form-row"><div class="form-label">Süre (Gün)</div>
+                  <select class="form-input" id="bt-days">
+                    <option value="7">Son 7 gün</option>
+                    <option value="30" selected>Son 30 gün</option>
+                    <option value="60">Son 60 gün</option>
+                    <option value="90">Son 90 gün</option>
+                  </select>
+                </div>
+                <div class="form-row"><div class="form-label">Sembol Sayısı</div><input class="form-input" type="number" id="bt-top" value="20" min="1" max="70"></div>
+                <div class="form-row"><div class="form-label">Başlangıç Tarihi (opsiyonel)</div><input class="form-input" type="text" id="bt-start" placeholder="2026-01-01"></div>
+                <div class="form-row"><div class="form-label">Bitiş Tarihi (opsiyonel)</div><input class="form-input" type="text" id="bt-end" placeholder="2026-03-31"></div>
+              </div>
+              <div class="btn-row" style="margin-top:8px">
+                <button class="btn green" onclick="startBacktest()">▶ Backtest Başlat</button>
+                <button class="btn red" onclick="stopBacktest()">■ Durdur</button>
+              </div>
+            </div>
+            <div class="panel"><div class="panel-title">Backtest Log</div><div class="log-box" id="bt-log" style="height:200px"></div></div>
+          </div>
+          <!-- Test Detayı -->
+          <div id="bt-detail-view" style="display:none">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+              <div>
+                <div style="font-size:13px;font-weight:500" id="bd-title">—</div>
+                <div style="font-size:10px;font-family:var(--mono);color:var(--muted);margin-top:2px" id="bd-sub">—</div>
+              </div>
+              <button class="btn" onclick="showNewTest()">+ Yeni Test</button>
+            </div>
+            <div class="metric-row">
+              <div class="metric"><div class="metric-lbl">Net PnL</div><div class="metric-val" id="bd-pnl">—</div></div>
+              <div class="metric"><div class="metric-lbl">Win Rate</div><div class="metric-val" id="bd-wr">—</div></div>
+              <div class="metric"><div class="metric-lbl">Max DD</div><div class="metric-val red" id="bd-dd">—</div></div>
+              <div class="metric"><div class="metric-lbl">Sharpe</div><div class="metric-val" id="bd-sh">—</div></div>
+            </div>
+            <div class="grid2">
+              <div class="panel">
+                <div class="panel-title">Config Snapshot</div>
+                <div class="cfg-snap-row"><span class="cfg-snap-lbl">score_long_open</span><span class="cfg-snap-val hi" id="bd-slong">—</span></div>
+                <div class="cfg-snap-row"><span class="cfg-snap-lbl">score_short_open</span><span class="cfg-snap-val hi" id="bd-sshort">—</span></div>
+                <div class="cfg-snap-row"><span class="cfg-snap-lbl">hard_stop_pct</span><span class="cfg-snap-val" id="bd-sl">—</span></div>
+                <div class="cfg-snap-row"><span class="cfg-snap-lbl">take_profit_min_pct</span><span class="cfg-snap-val" id="bd-tp">—</span></div>
+                <div class="cfg-snap-row"><span class="cfg-snap-lbl">trailing_step_pct</span><span class="cfg-snap-val" id="bd-trail">—</span></div>
+                <div class="cfg-snap-row"><span class="cfg-snap-lbl">atr_multiplier</span><span class="cfg-snap-val" id="bd-atr">—</span></div>
+                <div class="cfg-snap-row"><span class="cfg-snap-lbl">min_profit_close_pct</span><span class="cfg-snap-val" id="bd-mpc">—</span></div>
+              </div>
+              <div class="panel">
+                <div class="panel-title">Kapanış Nedenleri</div>
+                <div style="position:relative;height:130px"><canvas id="bd-reason-chart"></canvas></div>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="panel-title">Equity Eğrisi</div>
+              <div style="position:relative;height:150px"><canvas id="bd-equity-chart"></canvas></div>
+            </div>
+            <div class="panel">
+              <div class="panel-title">İşlem Detayları (ilk 100)</div>
+              <div style="overflow-x:auto">
+                <table class="trade-tbl">
+                  <thead><tr><th>Sembol</th><th>Yön</th><th>Giriş</th><th>Çıkış</th><th>Net PnL</th><th>Neden</th><th>Süre(dk)</th></tr></thead>
+                  <tbody id="bd-trade-body"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ İSTATİSTİKLER ═══ -->
+    <!-- Walk-Forward sayfası -->
+    <div class="page" id="page-walkforward">
+      <!-- Sol panel: geçmiş listesi -->
+      <div style="width:210px;flex-shrink:0;border-right:0.5px solid var(--color-border-tertiary);padding:14px 12px;overflow-y:auto">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <span style="font-size:12px;font-weight:600;color:var(--color-text-secondary)">GEÇMİŞ</span>
+          <span id="wf-count" style="font-size:11px;color:var(--color-text-tertiary)">0</span>
+        </div>
+        <div id="wf-list"></div>
+      </div>
+      <!-- Sağ panel -->
+      <div style="flex:1;padding:14px;overflow-y:auto">
+        <!-- Progress bar -->
+        <div class="progress-wrap" id="wf-progress-wrap" style="display:none;margin-bottom:10px">
+          <div class="progress-lbl">
+            <span id="wf-progress-lbl">Çalışıyor...</span>
+            <span id="wf-eta"></span>
+          </div>
+          <div class="progress-track"><div class="progress-fill" id="wf-progress-fill" style="width:0%"></div></div>
+        </div>
+        <!-- Form -->
+        <div id="wf-form-wrap">
+          <div class="panel">
+            <div class="panel-title">Yeni Walk-Forward Analizi</div>
+            <div class="config-row" style="margin-bottom:8px">
+              <div class="form-row">
+                <div class="form-label">Başlangıç Tarihi</div>
+                <input class="form-input" id="wf-start" type="date" value="2025-01-01">
+              </div>
+              <div class="form-row">
+                <div class="form-label">Bitiş Tarihi</div>
+                <input class="form-input" id="wf-end" type="date" value="2026-01-01">
+              </div>
+            </div>
+            <div class="config-row" style="margin-bottom:12px">
+              <div class="form-row">
+                <div class="form-label">Mum Aralığı</div>
+                <select class="form-input" id="wf-interval">
+                  <option value="1h" selected>1 Saatlik</option>
+                  <option value="4h">4 Saatlik</option>
+                  <option value="15m">15 Dakika</option>
+                </select>
+              </div>
+              <div class="form-row">
+                <div class="form-label">Sembol Sayısı</div>
+                <input class="form-input" id="wf-top" type="number" value="20" min="5" max="70">
+              </div>
+            </div>
+            <div style="display:flex;gap:8px">
+              <button class="btn green" onclick="startWalkForward()">▶ Başlat</button>
+              <button class="btn red" onclick="stopWalkForward()">■ Durdur</button>
+            </div>
+          </div>
+          <div class="panel" style="margin-top:10px">
+            <div class="panel-title">Log</div>
+            <div class="log-box" id="wf-log" style="height:150px"></div>
+          </div>
+        </div>
+        <!-- Sonuç detay -->
+        <div id="wf-detail" style="display:none">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <div style="font-size:12px;font-weight:600;color:var(--color-text-secondary)" id="wf-detail-title">—</div>
+            <button class="btn" onclick="showWfForm()" style="font-size:11px;padding:4px 10px">+ Yeni Analiz</button>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:14px" id="wf-summary-grid"></div>
+          <div class="panel">
+            <div class="panel-title">Aylık Detay</div>
+            <table style="width:100%;border-collapse:collapse;font-size:12px">
+              <thead>
+                <tr style="color:var(--color-text-tertiary)">
+                  <th style="padding:5px 8px;border-bottom:0.5px solid var(--color-border-tertiary);text-align:left">Ay</th>
+                  <th style="padding:5px 8px;border-bottom:0.5px solid var(--color-border-tertiary);text-align:right">İşlem</th>
+                  <th style="padding:5px 8px;border-bottom:0.5px solid var(--color-border-tertiary);text-align:right">WR</th>
+                  <th style="padding:5px 8px;border-bottom:0.5px solid var(--color-border-tertiary);text-align:right">PnL</th>
+                  <th style="padding:5px 8px;border-bottom:0.5px solid var(--color-border-tertiary);text-align:right">DD</th>
+                  <th style="padding:5px 8px;border-bottom:0.5px solid var(--color-border-tertiary);text-align:right">Sharpe</th>
+                </tr>
+              </thead>
+              <tbody id="wf-monthly-body"></tbody>
+            </table>
+          </div>
+          <div class="panel" style="margin-top:10px">
+            <div class="panel-title">Aylık PnL Dağılımı</div>
+            <div style="position:relative;height:180px"><canvas id="wf-bar-chart"></canvas></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="page" id="page-stats">
+      <div class="grid2">
+        <div class="panel"><div class="panel-title">Saatlik Performans</div><div style="position:relative;height:200px"><canvas id="hourly-chart"></canvas></div></div>
+        <div class="panel"><div class="panel-title">Coin Performansı</div><div id="coin-stats-list" style="max-height:200px;overflow-y:auto"></div></div>
+      </div>
+    </div>
+
+    <!-- ═══ KARA LİSTE ═══ -->
+    <div class="page" id="page-blacklist">
+      <div class="panel" style="max-width:500px">
+        <div class="panel-title">Kara Liste</div>
+        <div class="bl-row">
+          <input class="form-input bl-input" type="text" id="bl-sym" placeholder="Sembol (ör: BTC)">
+          <input class="form-input" type="number" id="bl-hours" value="24" min="1" max="168" style="width:70px">
+          <span style="font-size:10px;color:var(--muted);font-family:var(--mono)">sa</span>
+          <button class="btn green" onclick="blAdd()">Ekle</button>
+        </div>
+        <table class="trade-tbl">
+          <thead><tr><th>Sembol</th><th>Kalan (sa)</th><th></th></tr></thead>
+          <tbody id="bl-table-body"><tr><td colspan="3" style="color:var(--muted);text-align:center;padding:12px">Kara liste boş.</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ═══ CONFIG ═══ -->
+    <!-- page sınıfı kullanılıyor — nav mekanizmasıyla tutarlı -->
+    <div class="page" id="page-config">
+      <div class="grid2">
+        <!-- Sol panel: Risk + Eşikler -->
+        <div class="panel">
+          <div class="config-section-title">Risk</div>
+          <div class="config-row">
+            <div class="form-row"><div class="form-label">Take Profit (%)</div><input class="form-input" id="cfg-tp" type="number" step="0.1"></div>
+            <div class="form-row"><div class="form-label">Hard Stop (%)</div><input class="form-input" id="cfg-sl" type="number" step="0.1"></div>
+          </div>
+          <div class="config-row">
+            <div class="form-row"><div class="form-label">ATR Çarpanı</div><input class="form-input" id="cfg-atr-mult" type="number" step="0.1"></div>
+            <div class="form-row"><div class="form-label">Maks Stop (%)</div><input class="form-input" id="cfg-max-stop" type="number" step="0.1"></div>
+          </div>
+          <div class="config-row">
+            <div class="form-row"><div class="form-label">Trailing Adım (%)</div><input class="form-input" id="cfg-trail" type="number" step="0.1"></div>
+            <div class="form-row"><div class="form-label">Min Hold (dk)</div><input class="form-input" id="cfg-min-hold" type="number"></div>
+          </div>
+          <div class="config-row">
+            <div class="form-row"><div class="form-label">Risk/İşlem (%)</div><input class="form-input" id="cfg-risk-trade" type="number" step="0.1"></div>
+            <div class="form-row"><div class="form-label">Min Profit Kapat (%)</div><input class="form-input" id="cfg-min-profit" type="number" step="0.1"></div>
+          </div>
+          <div class="config-section-title">Eşikler</div>
+          <div class="config-row">
+            <div class="form-row"><div class="form-label">Long Aç (skor)</div><input class="form-input" id="cfg-slong" type="number"></div>
+            <div class="form-row"><div class="form-label">Short Aç (skor)</div><input class="form-input" id="cfg-sshort" type="number"></div>
+          </div>
+          <div class="config-row">
+            <div class="form-row"><div class="form-label">Kapat (skor)</div><input class="form-input" id="cfg-sclose" type="number"></div>
+          </div>
+          <div class="config-section-title">MTF Konfirmasyon</div>
+          <div class="config-row">
+            <div class="form-row"><div class="form-label">MTF Aktif</div>
+              <select class="form-input" id="cfg-mtf-enabled">
+                <option value="true">Açık</option>
+                <option value="false">Kapalı</option>
+              </select>
+            </div>
+          </div>
+          <div class="config-row">
+            <div class="form-row"><div class="form-label">HTF Long Min Skor</div><input class="form-input" id="cfg-htf-long-min" type="number" step="0.5"></div>
+            <div class="form-row"><div class="form-label">HTF Short Maks Skor</div><input class="form-input" id="cfg-htf-short-max" type="number" step="0.5"></div>
+          </div>
+          <div class="config-row">
+            <div class="form-row"><div class="form-label">HTF Aralık</div><input class="form-input" id="cfg-htf-interval" type="text" placeholder="1h"></div>
+          </div>
+
+          <div class="config-section-title">BTC Trend Filtresi</div>
+          <div class="config-row">
+            <div class="form-row">
+              <div class="form-label">BTC Filtresi</div>
+              <select class="form-input" id="cfg-btc-enabled">
+                <option value="true">Açık</option>
+                <option value="false">Kapalı</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <div class="form-label">Lookback (mum)</div>
+              <input class="form-input" id="cfg-btc-lookback" type="number" min="1" max="20">
+            </div>
+          </div>
+          <div class="config-row">
+            <div class="form-row">
+              <div class="form-label">Düşüş Eşiği (%)</div>
+              <input class="form-input" id="cfg-btc-drop" type="number" step="0.1" min="0.5" max="5">
+            </div>
+          </div>
+
+          <div class="config-section-title">ADX Filtresi</div>
+          <div class="config-row">
+            <div class="form-row">
+              <div class="form-label">ADX Filtresi</div>
+              <select class="form-input" id="cfg-adx-enabled">
+                <option value="true">Açık</option>
+                <option value="false">Kapalı</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <div class="form-label">ADX Eşiği</div>
+              <input class="form-input" id="cfg-adx-threshold" type="number" step="1" min="10" max="50">
+            </div>
+          </div>
+
+          <div class="config-section-title">Otonom Sembol Filtresi (Küçültme)</div>
+          <div class="config-row">
+            <div class="form-row">
+              <div class="form-label">Oto Filtre</div>
+              <select class="form-input" id="cfg-asf-enabled">
+                <option value="true">Açık</option>
+                <option value="false">Kapalı</option>
+              </select>
+            </div>
+            <div class="form-row">
+              <div class="form-label">Rolling Pencere</div>
+              <input class="form-input" id="cfg-asf-window" type="number" step="1" min="3" max="50">
+            </div>
+          </div>
+          <div class="config-row">
+            <div class="form-row">
+              <div class="form-label">Min İşlem</div>
+              <input class="form-input" id="cfg-asf-mintr" type="number" step="1" min="3" max="30">
+            </div>
+            <div class="form-row">
+              <div class="form-label">Min Çarpan</div>
+              <input class="form-input" id="cfg-asf-minmult" type="number" step="0.05" min="0" max="1">
+            </div>
+          </div>
+          <div class="config-row">
+            <div class="form-row">
+              <div class="form-label">Tier1 PnL (→%75)</div>
+              <input class="form-input" id="cfg-asf-t1" type="number" step="5" min="-300" max="0">
+            </div>
+            <div class="form-row">
+              <div class="form-label">Tier2 PnL (→%50)</div>
+              <input class="form-input" id="cfg-asf-t2" type="number" step="5" min="-300" max="0">
+            </div>
+          </div>
+          <div class="config-row">
+            <div class="form-row">
+              <div class="form-label">Tier3 PnL (→%25)</div>
+              <input class="form-input" id="cfg-asf-t3" type="number" step="5" min="-500" max="0">
+            </div>
+          </div>
+        </div>
+
+        <!-- Sağ panel: Limitler + Mod + Misc -->
+        <div class="panel">
+          <div class="config-section-title">Limitler</div>
+          <div class="config-row">
+            <div class="form-row"><div class="form-label">Günlük Maks İşlem</div><input class="form-input" id="cfg-max-trades" type="number"></div>
+            <div class="form-row"><div class="form-label">Maks Açık Pozisyon</div><input class="form-input" id="cfg-max-pos" type="number"></div>
+          </div>
+          <div class="config-row">
+            <div class="form-row"><div class="form-label">Günlük Hedef (%)</div><input class="form-input" id="cfg-daily-target" type="number" step="0.1"></div>
+            <div class="form-row"><div class="form-label">Günlük Zarar Limiti (%)</div><input class="form-input" id="cfg-daily-loss" type="number" step="0.1"></div>
+          </div>
+          <div class="config-row">
+            <div class="form-row"><div class="form-label">Maks Hold (saat)</div><input class="form-input" id="cfg-max-hold-hours" type="number"></div>
+          </div>
+          <div class="config-section-title">Mod</div>
+          <div class="config-row">
+            <div class="form-row"><div class="form-label">Sembol Sayısı</div><input class="form-input" id="cfg-topn" type="number"></div>
+            <div class="form-row"><div class="form-label">Mum Aralığı</div><input class="form-input" id="cfg-interval" type="text"></div>
+          </div>
+          <div class="config-row">
+            <div class="form-row"><div class="form-label">Preload Mum</div><input class="form-input" id="cfg-preload" type="number"></div>
+          </div>
+          <div class="config-section-title">Misc</div>
+          <div class="config-row">
+            <div class="form-row"><div class="form-label">Başlangıç Bakiyesi</div><input class="form-input" id="cfg-equity" type="number"></div>
+            <div class="form-row"><div class="form-label">Min Notional (USDT)</div><input class="form-input" id="cfg-notional" type="number"></div>
+          </div>
+          <div class="config-row">
+            <div class="form-row"><div class="form-label">Komisyon (%)</div><input class="form-input" id="cfg-commission" type="number" step="0.01"></div>
+            <div class="form-row"><div class="form-label">Slippage (%)</div><input class="form-input" id="cfg-slippage" type="number" step="0.01"></div>
+          </div>
+          <div class="config-section-title">Partial TP</div>
+          <div class="config-row">
+            <div class="form-row"><div class="form-label">Partial TP</div>
+              <select class="form-input" id="cfg-ptp-enabled">
+                <option value="true">Açık</option>
+                <option value="false">Kapalı</option>
+              </select>
+            </div>
+            <div class="form-row"><div class="form-label">TP1 R Çarpanı</div><input class="form-input" id="cfg-ptp-r-mult" type="number" step="0.05"></div>
+          </div>
+          <div class="config-row">
+            <div class="form-row"><div class="form-label">Kapatılacak Lot (%)</div><input class="form-input" id="cfg-ptp-close-pct" type="number" step="0.05"></div>
+          </div>
+          <div class="config-section-title">Pyramiding</div>
+          <div class="config-row">
+            <div class="form-row"><div class="form-label">Pyramiding</div>
+              <select class="form-input" id="cfg-pyr-enabled">
+                <option value="false">Kapalı</option>
+                <option value="true">Açık</option>
+              </select>
+            </div>
+            <div class="form-row"><div class="form-label">Adım (%)</div><input class="form-input" id="cfg-pyr-step" type="number" step="0.5"></div>
+          </div>
+          <div class="config-row">
+            <div class="form-row"><div class="form-label">Maks Adım</div><input class="form-input" id="cfg-pyr-max-steps" type="number" min="1" max="10"></div>
+          </div>
+          <div style="margin-top:14px">
+            <button class="btn green" onclick="saveConfig()" style="width:100%">💾 Kaydet</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /main -->
+</div><!-- /app -->
+
+<script>
+// ── State ─────────────────────────────────────────────────────
+let _logIdx    = 0;
+let _agentOn   = false;
+let _btRunning = false;
+let _btStart   = 0;
+let _cfgData   = null;
+let _eqChart   = null;
+let _rsChart   = null;
+let _hrChart   = null;
+let _bdEqChart = null;
+let _bdRsChart = null;
+
+// DOM diff — önceki render değerleri
+let _prevState = {
+  ws: null, universe: null, shards: null, preload: null,
+  pnl: null, pnlPct: null, daily: null, equity: null,
+  top5: null, posKey: null
+};
+// ── Nav — TEK ve NET mekanizma ────────────────────────────────
+function goPage(page) {
+  // Tüm sayfaları gizle
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  // Tüm nav itemları pasifleştir
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  // Hedef sayfayı göster
+  const pageEl = document.getElementById('page-' + page);
+  if (pageEl) pageEl.classList.add('active');
+  // Nav itemı aktifleştir
+  const navEl = document.querySelector(`.nav-item[data-page="${page}"]`);
+  if (navEl) navEl.classList.add('active');
+  // Başlığı güncelle
+  document.getElementById('page-title').textContent = navEl ? navEl.textContent.trim() : page;
+  // Sayfa özel tetikleyiciler — pywebview hazır değilse çağırma
+  if (typeof pywebview === 'undefined' || !pywebview.api) return;
+  if (page === 'stats')     loadStats();
+  if (page === 'blacklist') loadBlacklist();
+  if (page === 'config')    loadConfig();
+}
+
+document.querySelectorAll('.nav-item').forEach(el => {
+  el.addEventListener('click', () => goPage(el.dataset.page));
+});
+
+// ── Yardımcılar ───────────────────────────────────────────────
+function fmt(v, prefix='$', dec=2) { return prefix + (v >= 0 ? '+' : '') + v.toFixed(dec); }
+function cls(v) { return v >= 0 ? 'green' : 'red'; }
+function badgeHtml(side) { return `<span class="badge ${side.toLowerCase()}">${side}</span>`; }
+function reasonBadge(r) {
+  const map = {SL:'sl', TP:'tp', Trail:'trail', ScoreClose:'sc', MaxHold:'', EndOfTest:''};
+  return `<span class="badge ${map[r]||''}">${r}</span>`;
+}
+
+// ── Bot Kontrol ───────────────────────────────────────────────
+async function startBot()      { await pywebview.api.start_bot(); }
+async function stopBot()       { await pywebview.api.stop_bot(); }
+async function updateSymbols() { await pywebview.api.update_symbols(); }
+async function runOptimize()   { await pywebview.api.run_optimize(); }
+async function toggleAgent() {
+  _agentOn = !_agentOn;
+  await pywebview.api.toggle_agent(_agentOn);
+  document.getElementById('btn-agent').textContent = _agentOn ? 'Agent: Açık' : 'Agent: Kapalı';
+  document.getElementById('btn-agent').className   = _agentOn ? 'btn amber' : 'btn';
+}
+
+// ── Poll Loop ─────────────────────────────────────────────────
+async function poll() {
+  try {
+    const state = await pywebview.api.get_state();
+    updateDashboard(state);
+    await pollLogs();
+    if (_btRunning) await pollBacktest();
+  } catch(e) {}
+  setTimeout(poll, 800);
+}
+
+// ── DOM yardımcısı — sadece değişince yazar ──────────────────
+function _setText(id, val) {
+  const el = document.getElementById(id);
+  if (el && el.textContent !== String(val)) el.textContent = val;
+}
+function _setClass(id, cls) {
+  const el = document.getElementById(id);
+  if (el && el.className !== cls) el.className = cls;
+}
+function _setHtml(id, html) {
+  const el = document.getElementById(id);
+  if (el && el.innerHTML !== html) el.innerHTML = html;
+}
+
+function updateDashboard(s) {
+  const live = s.ws === 'open';
+
+  // Titlebar & nav — sadece ws durumu değişince
+  if (s.ws !== _prevState.ws || s.universe !== _prevState.universe) {
+    const el = document.getElementById('live-dot');
+    if (el) el.className = 'tb-dot-live ' + (live ? 'on' : 'off');
+    _setText('tb-status-text', live ? `Canlı · ${s.universe} sembol · ${s.shards} shard` : 'Durduruldu');
+    _prevState.ws        = s.ws;
+    _prevState.universe  = s.universe;
+    _prevState.shards    = s.shards;
+  }
+
+  // Nav bot info — saat her tick değişiyor, sadece preload/ws değişince yaz
+  if (s.ws !== _prevState.ws || s.preload !== _prevState.preload) {
+    _setHtml('nav-bot-info', `WS: ${s.ws}<br>Preload: ${s.preload ? '✓' : '…'}<br>${new Date().toLocaleTimeString('tr-TR')}`);
+    _prevState.preload = s.preload;
+  }
+
+  // PnL metrikleri — değer değişince güncelle
+  const pnlStr = fmt(s.pnl_usd);
+  if (pnlStr !== _prevState.pnl) {
+    _setText('m-pnl', pnlStr);
+    _setClass('m-pnl', 'metric-val ' + cls(s.pnl_usd));
+    _prevState.pnl = pnlStr;
+  }
+  const pnlPctStr = fmt(s.pnl_pct, '%', 3);
+  if (pnlPctStr !== _prevState.pnlPct) {
+    _setText('m-pnl-pct', pnlPctStr);
+    _prevState.pnlPct = pnlPctStr;
+  }
+  const dailyStr = fmt(s.daily, '$', 2);
+  if (dailyStr !== _prevState.daily) {
+    _setText('m-daily', dailyStr);
+    _setClass('m-daily', 'metric-val ' + cls(s.daily));
+    _prevState.daily = dailyStr;
+  }
+  const equityStr = '$' + s.equity.toFixed(2);
+  if (equityStr !== _prevState.equity) {
+    _setText('m-equity', equityStr);
+    _prevState.equity = equityStr;
+  }
+
+  // Top-5 — sadece veri değişince DOM'a yaz
+  if (s.top5 && s.top5 !== _prevState.top5) {
+    const html = s.top5.split('\n').filter(Boolean).map(l => {
+      const m = l.match(/(\S+)\s+score=\s*([\d.]+)/);
+      if (!m) return '';
+      const sc = parseFloat(m[2]);
+      const color = sc >= 50 ? 'var(--acc)' : 'var(--red)';
+      return `<div class="score-bar-wrap">
+        <span class="score-sym">${m[1]}</span>
+        <div class="score-track"><div class="score-fill" style="width:${Math.min(sc,100)}%;background:${color}"></div></div>
+        <span class="score-num" style="color:${color}">${sc.toFixed(1)}</span>
+      </div>`;
+    }).join('');
+    _setHtml('top5-list', html);
+    _prevState.top5 = s.top5;
+  }
+
+  updatePositions();
+}
+
+async function updatePositions() {
+  const positions = await pywebview.api.get_positions();
+  const maxPos    = (_cfgData?.limits?.max_open_positions) ?? '—';
+  const posCount  = `${positions.length} / ${maxPos}`;
+
+  // Pozisyon sayısı değişmediyse m-pos'u yeniden yazma
+  if (posCount !== _prevState.posCount) {
+    _setText('m-pos', posCount);
+    _prevState.posCount = posCount;
+  }
+
+  // Pozisyon içeriği — sembol+side+age key'i üret, değişmediyse DOM'a dokunma
+  const posKey = positions.map(p => `${p.symbol}${p.side}${p.age_min}${p.trail_pct}`).join('|');
+  if (posKey === _prevState.posKey) return;
+  _prevState.posKey = posKey;
+
+  const posListHtml = positions.length
+    ? positions.map(p => `<div class="pos-row"><div>
+        <div class="pos-sym">${p.symbol} ${badgeHtml(p.side)}</div>
+        <div class="pos-meta">Giriş: ${p.entry?.toFixed(4)} · ${p.age_min} dk · Trail: ${p.trail_pct}%</div>
+      </div></div>`).join('')
+    : '<div style="color:var(--muted);font-size:11px;font-family:var(--mono)">Pozisyon yok.</div>';
+
+  const posTableHtml = positions.length
+    ? positions.map(p => `<tr>
+        <td>${p.symbol}</td><td>${badgeHtml(p.side)}</td>
+        <td>${p.entry?.toFixed(4)}</td><td>${p.age_min}</td><td>${p.trail_pct}</td>
+      </tr>`).join('')
+    : '<tr><td colspan="5" style="color:var(--muted);text-align:center;padding:16px">Pozisyon yok.</td></tr>';
+
+  _setHtml('pos-list',        posListHtml);
+  _setHtml('pos-table-body',  posTableHtml);
+}
+
+// ── Log ───────────────────────────────────────────────────────
+async function pollLogs() {
+  const res = await pywebview.api.get_logs(_logIdx);
+  if (!res.lines.length) return;
+  _logIdx = res.total;
+  appendLogs('dash-log', res.lines.slice(-10));
+  appendLogs('full-log', res.lines);
+  appendLogs('bt-log',   res.lines.filter(l => l.includes('[BT]') || l.includes('[Backtest]')));
+  if (document.getElementById('wf-log')) appendLogs('wf-log', res.lines.filter(l => l.includes('[WF]')));
+}
+
+const _BT_NOISE = [
+  'DeprecationWarning', 'warnings.warn', 'utcfromtimestamp',
+  'Use timezone-aware', 'scheduled for removal',
+  'day = datetime', '.strftime(', 'File "', 'line ', '^^^', '~~~',
+];
+
+function classifyLog(line) {
+  if (line.includes('[OPEN]'))                                  return 'log-open';
+  if (line.includes('[EXIT]') || line.includes('SL') || line.includes('TP')) return 'log-close';
+  if (line.includes('[HATA]') || line.includes('WARN'))         return 'log-warn';
+  if (line.includes('[BT]')   || line.includes('[Backtest]'))   return 'log-bt';
+  return 'log-info';
+}
+
+function _isNoise(line) {
+  return _BT_NOISE.some(p => line.includes(p));
+}
+
+function appendLogs(id, lines) {
+  const box = document.getElementById(id);
+  if (!box) return;
+  lines.forEach(line => {
+    if (_isNoise(line)) return;
+    const div = document.createElement('div');
+    div.className = 'log-line';
+    const ts  = line.match(/^\[(\d{2}:\d{2}:\d{2})\]/)?.[1] || '';
+    const msg = line.replace(/^\[\d{2}:\d{2}:\d{2}\]\s*/, '');
+    div.innerHTML = `<span class="log-t">${ts}</span><span class="${classifyLog(line)}">${msg}</span>`;
+    box.appendChild(div);
+  });
+  box.scrollTop = box.scrollHeight;
+  while (box.children.length > 300) box.removeChild(box.firstChild);
+}
+
+// ── Backtest ──────────────────────────────────────────────────
+function showNewTest() {
+  document.getElementById('bt-new-form').style.display   = '';
+  document.getElementById('bt-detail-view').style.display = 'none';
+  document.querySelectorAll('.bt-item').forEach(el => el.classList.remove('active'));
+}
+
+async function startBacktest() {
+  const params = {
+    mode:     document.getElementById('bt-mode').value,
+    interval: document.getElementById('bt-interval').value,
+    days:     parseInt(document.getElementById('bt-days').value),
+    top:      parseInt(document.getElementById('bt-top').value),
+    start:    document.getElementById('bt-start').value.trim(),
+    end:      document.getElementById('bt-end').value.trim(),
+  };
+  const res = await pywebview.api.start_backtest(params);
+  if (!res.ok) { alert(res.error); return; }
+  _btRunning = true;
+  _btStart   = Date.now();
+  document.getElementById('bt-progress-wrap').style.display = 'block';
+  document.getElementById('bt-progress-fill').style.width   = '0%';
+  document.getElementById('bt-progress-lbl').textContent    = 'Çalışıyor...';
+  document.getElementById('bt-eta').textContent             = '—';
+  await loadBtHistory();
+}
+
+async function stopBacktest() {
+  await pywebview.api.stop_backtest();
+  _btRunning = false;
+  document.getElementById('bt-progress-wrap').style.display = 'none';
+}
+
+async function pollBacktest() {
+  const st = await pywebview.api.get_backtest_status();
+  if (st.running) {
+    const elapsed = (Date.now() - _btStart) / 1000;
+    const pct = Math.min(elapsed / 600 * 100, 95);
+    document.getElementById('bt-progress-fill').style.width = pct.toFixed(0) + '%';
+    document.getElementById('bt-eta').textContent = `~${Math.max(0, Math.round(600 - elapsed))}s`;
+  } else {
+    _btRunning = false;
+    document.getElementById('bt-progress-fill').style.width  = '100%';
+    document.getElementById('bt-progress-lbl').textContent   = 'Tamamlandı!';
+    document.getElementById('bt-eta').textContent            = '';
+    await loadBtHistory();
+    const items = document.querySelectorAll('.bt-item');
+    if (items.length > 0) items[0].click();
+  }
+}
+
+async function loadBtHistory() {
+  const list = await pywebview.api.get_backtest_history();
+  document.getElementById('bt-hist-count').textContent = list.length;
+  const container = document.getElementById('bt-hist-list');
+  if (!list.length) {
+    container.innerHTML = '<div style="padding:14px;color:var(--muted);font-size:11px;font-family:var(--mono)">Henüz test yok.</div>';
+    return;
+  }
+  container.innerHTML = list.map(t => {
+    const cfg = t.config || {}, sum = t.summary || {};
+    const pnl = sum['NetPnL'] || '—', wr = sum['KazanmaOrani'] || '—', dd = sum['MaxDrawdown'] || '—';
+    const mode = cfg.mode || 'normal';
+    const modeTag = (mode === 'oos' || mode === 'oos_save') ? '<span class="bt-badge run">OOS</span>'
+      : (mode === 'optimize' || mode === 'opt_save')        ? '<span class="bt-badge neu">OPT</span>'
+      : '<span style="font-size:9px;color:var(--muted);font-family:var(--mono)">NORMAL</span>';
+    const pnlNum = parseFloat((pnl||'0').replace(/[^0-9.\-+]/g,''));
+    const folder = t.folder;
+    return `<div class="bt-item" onclick="selectBtTest('${folder}', this)">
+      <div class="bt-item-date">${folder.substring(0,16).replace('_',' ')} ${modeTag}</div>
+      <div class="bt-item-params">${cfg.interval||'—'} · ${cfg.days||'—'} gün · ${cfg.top||'—'} sembol</div>
+      <div class="bt-item-metrics">
+        <span class="bt-badge ${pnlNum>=0?'pos':'neg'}">${pnl}</span>
+        <span class="bt-badge neu">${wr}</span>
+        <span class="bt-badge neg">${dd}</span>
+      </div>
+      <span class="bt-del" onclick="event.stopPropagation();deleteBtTest('${folder}')">sil</span>
+    </div>`;
+  }).join('');
+}
+
+async function selectBtTest(folder, el) {
+  document.querySelectorAll('.bt-item').forEach(e => e.classList.remove('active'));
+  if (el) el.classList.add('active');
+  document.getElementById('bt-new-form').style.display    = 'none';
+  document.getElementById('bt-detail-view').style.display = '';
+
+  const data = await pywebview.api.get_backtest_results(folder);
+  const s = data.summary || {}, cfg = data.config || {};
+
+  document.getElementById('bd-title').textContent = folder.substring(0,16).replace('_',' ') + ' — ' + (cfg.mode||'normal').toUpperCase();
+  document.getElementById('bd-sub').textContent   = `${cfg.interval||'—'} · ${cfg.days||'—'} gün · ${cfg.top||'—'} sembol`;
+
+  const pnl = parseFloat((s['NetPnL']||'0').replace(/[^0-9.\-+]/g,''));
+  document.getElementById('bd-pnl').textContent = s['NetPnL']       || '—';
+  document.getElementById('bd-pnl').className   = 'metric-val ' + cls(pnl);
+  document.getElementById('bd-wr').textContent  = s['KazanmaOrani'] || '—';
+  document.getElementById('bd-dd').textContent  = s['MaxDrawdown']  || '—';
+  document.getElementById('bd-sh').textContent  = s['SharpeOrani']  || '—';
+
+  document.getElementById('bd-slong').textContent  = cfg.score_long_open       || '—';
+  document.getElementById('bd-sshort').textContent = cfg.score_short_open      || '—';
+  document.getElementById('bd-sl').textContent     = '%' + (cfg.hard_stop_pct        || '—');
+  document.getElementById('bd-tp').textContent     = '%' + (cfg.take_profit_min_pct  || '—');
+  document.getElementById('bd-trail').textContent  = '%' + (cfg.trailing_step_pct    || '—');
+  document.getElementById('bd-atr').textContent    = (cfg.atr_multiplier || '—') + 'x';
+  document.getElementById('bd-mpc').textContent    = '%' + (cfg.min_profit_close_pct || '—');
+
+  if (data.equity?.length) {
+    if (_bdEqChart) _bdEqChart.destroy();
+    const eqVals  = data.equity.map(e => e.v);
+    const eqColor = eqVals[eqVals.length-1] >= eqVals[0] ? '#00d4aa' : '#ef4444';
+    _bdEqChart = new Chart(document.getElementById('bd-equity-chart'), {
+      type:'line', data:{labels:eqVals.map((_,i)=>i),datasets:[{data:eqVals,borderColor:eqColor,borderWidth:1.5,pointRadius:0,fill:true,backgroundColor:eqColor+'12'}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{display:false},y:{ticks:{font:{size:9},color:'#64748b'},grid:{color:'rgba(255,255,255,0.04)'}}}}
+    });
+  }
+
+  if (data.trades?.length) {
+    const reasons = {};
+    data.trades.forEach(t => { reasons[t.reason] = (reasons[t.reason]||0)+1; });
+    if (_bdRsChart) _bdRsChart.destroy();
+    _bdRsChart = new Chart(document.getElementById('bd-reason-chart'), {
+      type:'doughnut',
+      data:{labels:Object.keys(reasons),datasets:[{data:Object.values(reasons),backgroundColor:['#00d4aa','#ef4444','#3b82f6','#f59e0b','#8b5cf6'],borderWidth:0}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'right',labels:{font:{size:10},color:'#94a3b8',boxWidth:9,padding:6}}}}
+    });
+    document.getElementById('bd-trade-body').innerHTML = data.trades.slice(0,100).map(t => {
+      const net = parseFloat(t.net_pnl||0);
+      return `<tr><td>${t.symbol}</td><td>${badgeHtml(t.side)}</td><td>${parseFloat(t.entry||0).toFixed(4)}</td><td>${parseFloat(t.exit||0).toFixed(4)}</td><td class="${cls(net)}">${t.net_pnl}</td><td>${reasonBadge(t.reason)}</td><td>${t.hold_min}</td></tr>`;
+    }).join('');
+  }
+}
+
+async function deleteBtTest(folder) {
+  if (!confirm('Bu testi silmek istediğinize emin misiniz?')) return;
+  await pywebview.api.delete_backtest(folder);
+  showNewTest();
+  await loadBtHistory();
+}
+
+// ── İstatistikler ─────────────────────────────────────────────
+async function loadStats() {
+  const [hourly, coins] = await Promise.all([pywebview.api.get_hourly_stats(), pywebview.api.get_coin_stats()]);
+
+  if (hourly.length) {
+    if (_hrChart) _hrChart.destroy();
+    _hrChart = new Chart(document.getElementById('hourly-chart'), {
+      type:'bar',
+      data:{labels:hourly.map(h=>h.hour+':00'),datasets:[{label:'Win Rate %',data:hourly.map(h=>h.win_rate),backgroundColor:hourly.map(h=>h.win_rate>=50?'#00d4aa55':'#ef444455'),borderColor:hourly.map(h=>h.win_rate>=50?'#00d4aa':'#ef4444'),borderWidth:1}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{font:{size:9},color:'#64748b'},grid:{display:false}},y:{ticks:{font:{size:9},color:'#64748b'},grid:{color:'rgba(255,255,255,0.04)'},max:100}}}
+    });
+  }
+
+  if (coins.length) {
+    const max = Math.max(...coins.map(c=>Math.abs(c.pnl)),1);
+    document.getElementById('coin-stats-list').innerHTML = coins.map(c => {
+      const pct = Math.abs(c.pnl)/max*100, col = c.pnl>=0?'var(--acc)':'var(--red)';
+      return `<div class="pnl-bar-row"><span class="pnl-sym">${c.symbol.replace('USDT','')}</span><div class="pnl-track"><div class="pnl-fill" style="width:${pct.toFixed(0)}%;background:${col}"></div></div><span class="pnl-val" style="color:${col}">${c.pnl>=0?'+':''}$${c.pnl.toFixed(1)}</span></div>`;
+    }).join('');
+
+    const max2 = Math.max(...coins.map(c=>Math.abs(c.pnl)),1);
+    document.getElementById('coin-pnl-list').innerHTML = coins.slice(0,8).map(c => {
+      const pct = Math.abs(c.pnl)/max2*100, col = c.pnl>=0?'var(--acc)':'var(--red)';
+      return `<div class="pnl-bar-row"><span class="pnl-sym">${c.symbol.replace('USDT','')}</span><div class="pnl-track"><div class="pnl-fill" style="width:${pct.toFixed(0)}%;background:${col}"></div></div><span class="pnl-val" style="color:${col}">${c.pnl>=0?'+':''}$${c.pnl.toFixed(1)}</span></div>`;
+    }).join('');
+  }
+}
+
+// ── Kara Liste ────────────────────────────────────────────────
+async function loadBlacklist() {
+  const bl = await pywebview.api.get_blacklist();
+  const tbody = document.getElementById('bl-table-body');
+  tbody.innerHTML = bl.length
+    ? bl.map(([sym,hrs]) => `<tr><td>${sym}</td><td>${hrs.toFixed(1)}</td><td><button class="btn red" style="padding:3px 8px;font-size:10px" onclick="blRemove('${sym}')">Çıkar</button></td></tr>`).join('')
+    : '<tr><td colspan="3" style="color:var(--muted);text-align:center;padding:12px">Kara liste boş.</td></tr>';
+}
+
+async function blAdd() {
+  const sym = document.getElementById('bl-sym').value.trim();
+  const hrs = parseFloat(document.getElementById('bl-hours').value);
+  if (!sym) return;
+  await pywebview.api.blacklist_add(sym, hrs);
+  document.getElementById('bl-sym').value = '';
+  await loadBlacklist();
+}
+
+async function blRemove(sym) {
+  await pywebview.api.blacklist_remove(sym);
+  await loadBlacklist();
+}
+
+// ── Config ────────────────────────────────────────────────────
+async function loadConfig() {
+  try {
+    const res = await pywebview.api.get_config();
+    if (!res.ok) { console.error('Config yüklenemedi:', res.error); return; }
+    _cfgData = res.data;
+
+    const r   = _cfgData?.risk        || {};
+    const l   = _cfgData?.limits      || {};
+    const t   = _cfgData?.thresholds  || {};
+    const m   = _cfgData?.mode        || {};
+    const mi  = _cfgData?.misc        || {};
+    const mtf = _cfgData?.mtf         || {};
+
+    const set = (id, val) => {
+      const el = document.getElementById(id);
+      if (el && val !== undefined && val !== null) el.value = val;
+    };
+
+    set('cfg-tp',           r.take_profit_min_pct);
+    set('cfg-sl',           r.hard_stop_pct);
+    set('cfg-atr-mult',     r.atr_multiplier);
+    set('cfg-max-stop',     r.max_stop_pct);
+    set('cfg-trail',        r.trailing_step_pct);
+    set('cfg-min-hold',     r.min_hold_minutes);
+    set('cfg-risk-trade',   r.risk_per_trade_pct);
+    set('cfg-min-profit',   r.min_profit_close_pct);
+    set('cfg-slong',        t.score_long_open);
+    set('cfg-sshort',       t.score_short_open);
+    set('cfg-sclose',       t.score_close);
+    set('cfg-max-trades',   l.max_trades_per_day);
+    set('cfg-max-pos',      l.max_open_positions);
+    set('cfg-daily-target', l.daily_target_pct);
+    set('cfg-daily-loss',   l.daily_loss_limit_pct);
+    set('cfg-topn',         m.top_n);
+    set('cfg-interval',     m.interval);
+    set('cfg-equity',       mi.starting_equity_usdt);
+    set('cfg-notional',     mi.min_notional_usdt);
+    set('cfg-commission',   mi.commission_pct);
+    set('cfg-slippage',     mi.slippage_pct);
+    // MTF
+    set('cfg-htf-long-min',  mtf.htf_long_min);
+    set('cfg-htf-short-max', mtf.htf_short_max);
+    set('cfg-htf-interval',  mtf.htf_interval);
+    const mtfEl = document.getElementById('cfg-mtf-enabled');
+    if (mtfEl) mtfEl.value = mtf.enabled === false ? 'false' : 'true';
+    // Limits ek alanlar
+    set('cfg-max-hold-hours', l.max_hold_hours);
+    // Mod ek alanlar
+    set('cfg-preload', m.preload_candles);
+    // Partial TP
+    const ptp = _cfgData?.partial_tp || {};
+    const ptpEl = document.getElementById('cfg-ptp-enabled');
+    if (ptpEl) ptpEl.value = ptp.enabled === false ? 'false' : 'true';
+    set('cfg-ptp-r-mult',    ptp.tp1_r_mult ?? 0.75);
+    set('cfg-ptp-close-pct', ptp.close_pct  ?? 0.5);
+    // Pyramiding
+    const pyr = _cfgData?.pyramiding || {};
+    const pyrEl = document.getElementById('cfg-pyr-enabled');
+    if (pyrEl) pyrEl.value = pyr.enabled === true ? 'true' : 'false';
+    set('cfg-pyr-step',      pyr.step_pct  ?? 15);
+    set('cfg-pyr-max-steps', pyr.max_steps ?? 3);
+    // BTC Trend Filtresi
+    const btc = _cfgData?.btc_filter || {};
+    const btcEl = document.getElementById('cfg-btc-enabled');
+    if (btcEl) btcEl.value = btc.enabled === false ? 'false' : 'true';
+    set('cfg-btc-lookback', btc.lookback_candles ?? 4);
+    set('cfg-btc-drop',     btc.drop_pct         ?? 1.5);
+    // ADX Filtresi
+    const adx = _cfgData?.adx_filter || {};
+    const adxEl = document.getElementById('cfg-adx-enabled');
+    if (adxEl) adxEl.value = adx.enabled === false ? 'false' : 'true';
+    set('cfg-adx-threshold', adx.threshold ?? 25);
+    const asf = _cfgData?.auto_symbol_filter || {};
+    const asfEl = document.getElementById('cfg-asf-enabled');
+    if (asfEl) asfEl.value = asf.enabled === false ? 'false' : 'true';
+    set('cfg-asf-window',  asf.rolling_window ?? 10);
+    set('cfg-asf-mintr',   asf.min_trades     ?? 5);
+    set('cfg-asf-minmult', asf.min_multiplier ?? 0.25);
+    set('cfg-asf-t1',      asf.tier1_pnl      ?? -30);
+    set('cfg-asf-t2',      asf.tier2_pnl      ?? -60);
+    set('cfg-asf-t3',      asf.tier3_pnl      ?? -100);
+  } catch(e) {
+    console.error('loadConfig hatası:', e);
+  }
+}
+
+async function saveConfig() {
+  if (!_cfgData) { alert('Config henüz yüklenmedi.'); return; }
+  const d = JSON.parse(JSON.stringify(_cfgData)); // deep copy
+
+  d.risk = d.risk || {};
+  d.risk.take_profit_min_pct  = parseFloat(document.getElementById('cfg-tp').value);
+  d.risk.hard_stop_pct        = parseFloat(document.getElementById('cfg-sl').value);
+  d.risk.atr_multiplier       = parseFloat(document.getElementById('cfg-atr-mult').value);
+  d.risk.max_stop_pct         = parseFloat(document.getElementById('cfg-max-stop').value);
+  d.risk.trailing_step_pct    = parseFloat(document.getElementById('cfg-trail').value);
+  d.risk.min_hold_minutes     = parseInt(document.getElementById('cfg-min-hold').value);
+  d.risk.risk_per_trade_pct   = parseFloat(document.getElementById('cfg-risk-trade').value);
+  d.risk.min_profit_close_pct = parseFloat(document.getElementById('cfg-min-profit').value);
+
+  d.thresholds = d.thresholds || {};
+  d.thresholds.score_long_open  = parseInt(document.getElementById('cfg-slong').value);
+  d.thresholds.score_short_open = parseInt(document.getElementById('cfg-sshort').value);
+  d.thresholds.score_close      = parseInt(document.getElementById('cfg-sclose').value);
+
+  d.limits = d.limits || {};
+  d.limits.max_trades_per_day   = parseInt(document.getElementById('cfg-max-trades').value);
+  d.limits.max_open_positions   = parseInt(document.getElementById('cfg-max-pos').value);
+  d.limits.daily_target_pct     = parseFloat(document.getElementById('cfg-daily-target').value);
+  d.limits.daily_loss_limit_pct = parseFloat(document.getElementById('cfg-daily-loss').value);
+  d.limits.max_hold_hours       = parseInt(document.getElementById('cfg-max-hold-hours').value);
+
+  d.mode = d.mode || {};
+  d.mode.top_n           = parseInt(document.getElementById('cfg-topn').value);
+  d.mode.interval        = document.getElementById('cfg-interval').value.trim();
+  d.mode.preload_candles = parseInt(document.getElementById('cfg-preload').value);
+
+  d.misc = d.misc || {};
+  d.misc.starting_equity_usdt = parseFloat(document.getElementById('cfg-equity').value);
+  d.misc.min_notional_usdt    = parseFloat(document.getElementById('cfg-notional').value);
+  d.misc.commission_pct       = parseFloat(document.getElementById('cfg-commission').value);
+  d.misc.slippage_pct         = parseFloat(document.getElementById('cfg-slippage').value);
+
+  d.mtf = d.mtf || {};
+  d.mtf.enabled       = document.getElementById('cfg-mtf-enabled').value === 'true';
+  d.mtf.htf_long_min  = parseFloat(document.getElementById('cfg-htf-long-min').value);
+  d.mtf.htf_short_max = parseFloat(document.getElementById('cfg-htf-short-max').value);
+  d.mtf.htf_interval  = document.getElementById('cfg-htf-interval').value.trim();
+
+  // BTC Trend Filtresi
+  d.btc_filter = d.btc_filter || {};
+  d.btc_filter.enabled          = document.getElementById('cfg-btc-enabled').value === 'true';
+  d.btc_filter.lookback_candles = parseInt(document.getElementById('cfg-btc-lookback').value);
+  d.btc_filter.drop_pct         = parseFloat(document.getElementById('cfg-btc-drop').value);
+
+  // ADX Filtresi
+  d.adx_filter = d.adx_filter || {};
+  d.adx_filter.enabled   = document.getElementById('cfg-adx-enabled').value === 'true';
+  d.adx_filter.threshold = parseFloat(document.getElementById('cfg-adx-threshold').value);
+  d.auto_symbol_filter = d.auto_symbol_filter || {};
+  d.auto_symbol_filter.enabled        = document.getElementById('cfg-asf-enabled').value === 'true';
+  d.auto_symbol_filter.rolling_window = parseInt(document.getElementById('cfg-asf-window').value);
+  d.auto_symbol_filter.min_trades     = parseInt(document.getElementById('cfg-asf-mintr').value);
+  d.auto_symbol_filter.min_multiplier = parseFloat(document.getElementById('cfg-asf-minmult').value);
+  d.auto_symbol_filter.tier1_pnl      = parseFloat(document.getElementById('cfg-asf-t1').value);
+  d.auto_symbol_filter.tier2_pnl      = parseFloat(document.getElementById('cfg-asf-t2').value);
+  d.auto_symbol_filter.tier3_pnl      = parseFloat(document.getElementById('cfg-asf-t3').value);
+
+  // Partial TP
+  d.partial_tp = d.partial_tp || {};
+  d.partial_tp.enabled    = document.getElementById('cfg-ptp-enabled').value === 'true';
+  d.partial_tp.tp1_r_mult = parseFloat(document.getElementById('cfg-ptp-r-mult').value);
+  d.partial_tp.close_pct  = parseFloat(document.getElementById('cfg-ptp-close-pct').value);
+
+  // Pyramiding
+  d.pyramiding = d.pyramiding || {};
+  d.pyramiding.enabled   = document.getElementById('cfg-pyr-enabled').value === 'true';
+  d.pyramiding.step_pct  = parseFloat(document.getElementById('cfg-pyr-step').value);
+  d.pyramiding.max_steps = parseInt(document.getElementById('cfg-pyr-max-steps').value);
+
+  const res = await pywebview.api.save_config(d);
+  if (res.ok) {
+    _cfgData = d;
+    alert('Config kaydedildi.');
+  } else {
+    alert('Kayıt hatası: ' + res.error);
+  }
+}
+
+// ── Başlat ────────────────────────────────────────────────────
+window.addEventListener('pywebviewready', () => {
+  poll();
+  setInterval(loadStats, 30000);
+  loadBtHistory();
+  setInterval(loadBtHistory, 10000);
+  // pywebview hazır olmadan açılan sayfaları şimdi yükle
+  const activePage = document.querySelector('.nav-item.active')?.dataset?.page;
+  if (activePage === 'config')    loadConfig();
+  if (activePage === 'stats')     loadStats();
+  if (activePage === 'blacklist') loadBlacklist();
+});
+
+// ── Walk-Forward ────────────────────────────────────────────────
+let _wfRunning = false;
+let _wfStart   = 0;
+
+async function startWalkForward() {
+  const params = {
+    start:    document.getElementById('wf-start').value,
+    end:      document.getElementById('wf-end').value,
+    interval: document.getElementById('wf-interval').value,
+    top:      parseInt(document.getElementById('wf-top').value),
+  };
+  if (params.start && params.start.includes('.')) {
+      const [d,m,y] = params.start.split('.');
+      params.start = `${y}-${m}-${d}`;
+   }
+   if (params.end && params.end.includes('.')) {
+      const [d,m,y] = params.end.split('.');
+      params.end = `${y}-${m}-${d}`;
+   }
+  if (!params.start || !params.end) { alert('Tarih girin.'); return; }
+  const res = await pywebview.api.start_walkforward(params);
+  if (!res.ok) { alert(res.error); return; }
+  _wfRunning = true; _wfStart = Date.now();
+  document.getElementById('wf-progress-wrap').style.display = '';
+  document.getElementById('wf-progress-fill').style.width   = '0%';
+  document.getElementById('wf-progress-lbl').textContent    = 'Çalışıyor...';
+}
+
+async function stopWalkForward() {
+  await pywebview.api.stop_walkforward();
+  _wfRunning = false;
+}
+
+async function pollWalkForward() {
+  const st = await pywebview.api.get_wf_status();
+  if (st.running) {
+    const elapsed = (Date.now() - _wfStart) / 1000;
+    const pct = Math.min(elapsed / 900 * 100, 95);
+    document.getElementById('wf-progress-fill').style.width = pct.toFixed(0) + '%';
+    const etaEl = document.getElementById('wf-eta');
+    if(etaEl) etaEl.textContent = '~' + Math.max(0,Math.round(900-elapsed)) + 's';
+  } else {
+    _wfRunning = false;
+    document.getElementById('wf-progress-fill').style.width  = '100%';
+    document.getElementById('wf-progress-lbl').textContent   = 'Tamamlandı!';
+    const etaEl = document.getElementById('wf-eta');
+    if(etaEl) etaEl.textContent = '';
+    await loadWfHistory();
+  }
+}
+
+async function loadWfHistory() {
+  const hist = await pywebview.api.get_wf_history();
+  const list = document.getElementById('wf-list');
+  if (!list) return;
+  document.getElementById('wf-count').textContent = hist.length;
+  list.innerHTML = hist.map(item => {
+    const s   = item.summary || {};
+    const pnl = s.total_pnl ?? 0;
+    const col = pnl >= 0 ? '#1D9E75' : '#E24B4A';
+    const f   = item.folder;
+    return `<div class="wf-item" onclick="selectWfResult('${f}')">
+      <div class="wf-date">${f.slice(0,16).replace('_',' ')}</div>
+      <div class="wf-pnl" style="color:${col}">${pnl>=0?'+':''}$${pnl.toFixed(0)}</div>
+      <div style="font-size:10px;color:var(--color-text-tertiary)">${s.pos_months??0}✅ ${s.neg_months??0}❌ · ${s.interval??''}</div>
+    </div>`;
+  }).join('');
+  if (hist.length > 0) selectWfResult(hist[0].folder);
+}
+
+async function selectWfResult(folder) {
+  const res = await pywebview.api.get_wf_results(folder);
+  const s   = res.summary || {};
+  const mon = res.monthly  || [];
+  document.getElementById('wf-form-wrap').style.display = 'none';
+  document.getElementById('wf-detail').style.display    = '';
+  const ttl = document.getElementById('wf-detail-title');
+  if(ttl) ttl.textContent = `${s.start_date??''} → ${s.end_date??''}  |  ${s.interval??''}  |  ${s.symbols??0} sembol`;
+
+  const pnlCol = (s.total_pnl??0)>=0?'#1D9E75':'#E24B4A';
+  const wCol   = (s.worst_pnl??0)>=-100?'#1D9E75':'#E24B4A';
+  const grid   = document.getElementById('wf-summary-grid');
+  if(grid) grid.innerHTML = [
+    ['Toplam PnL',    `<span style="color:${pnlCol}">${(s.total_pnl??0)>=0?'+':''}$${(s.total_pnl??0).toFixed(0)}</span>`],
+    ['Poz / Neg Ay',  `<span style="color:#1D9E75">${s.pos_months??0}</span> / <span style="color:#E24B4A">${s.neg_months??0}</span>`],
+    ['En Kötü Ay',    `<span style="color:${wCol}">${(s.worst_pnl??0)>=0?'+':''}$${(s.worst_pnl??0).toFixed(0)}</span><br><small style="font-size:9px;color:var(--color-text-tertiary)">${s.worst_month??''}</small>`],
+    ['Tutarlılık',    `${(s.consistency_score??0).toFixed(2)}`],
+  ].map(([l,v])=>`<div class="wf-card"><div class="wc-l">${l}</div><div class="wc-v">${v}</div></div>`).join('');
+
+  const tbody = document.getElementById('wf-monthly-body');
+  if(tbody) tbody.innerHTML = mon.map(r=>{
+    const pnl=parseFloat(r.pnl??0);
+    const col=pnl>=0?'#1D9E75':'#E24B4A';
+    return `<tr style="border-bottom:0.5px solid var(--color-border-tertiary)">
+      <td style="padding:5px 8px">${r.month}</td>
+      <td style="padding:5px 8px;text-align:right">${r.n}</td>
+      <td style="padding:5px 8px;text-align:right">%${parseFloat(r.wr??0).toFixed(0)}</td>
+      <td style="padding:5px 8px;text-align:right;color:${col};font-weight:500">${pnl>=0?'+':''}$${pnl.toFixed(0)}</td>
+      <td style="padding:5px 8px;text-align:right">%${parseFloat(r.dd??0).toFixed(1)}</td>
+      <td style="padding:5px 8px;text-align:right">${parseFloat(r.sharpe??0).toFixed(2)}</td>
+    </tr>`;
+  }).join('');
+
+  const cvs = document.getElementById('wf-bar-chart');
+  if(!cvs) return;
+  if(window._wfChart) window._wfChart.destroy();
+  const labels=mon.map(r=>r.month), vals=mon.map(r=>parseFloat(r.pnl??0));
+  window._wfChart = new Chart(cvs,{
+    type:'bar',
+    data:{labels,datasets:[{data:vals,
+      backgroundColor:vals.map(v=>v>=0?'rgba(29,158,117,0.7)':'rgba(226,75,74,0.7)'),
+      borderColor:vals.map(v=>v>=0?'#1D9E75':'#E24B4A'),borderWidth:1}]},
+    options:{responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false}},
+      scales:{x:{ticks:{font:{size:10},color:'#888'},grid:{display:false}},
+              y:{ticks:{font:{size:10},color:'#888',callback:v=>'$'+v},grid:{color:'rgba(0,0,0,0.04)'}}}}
+  });
+}
+
+function showWfForm() {
+  document.getElementById('wf-form-wrap').style.display = '';
+  document.getElementById('wf-detail').style.display    = 'none';
+}
+</script>
+</body>
+</html>

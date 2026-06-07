@@ -1,0 +1,20 @@
+# ── Temel bilimsel yığın ──────────────────────────────────────────
+numpy>=1.26
+pandas>=2.0
+scipy>=1.11
+pywebview>=4.4
+
+# ── Ağ / veri ────────────────────────────────────────────────────
+requests>=2.31
+websocket-client>=1.7
+
+# ── Yapılandırma / yardımcı ──────────────────────────────────────
+PyYAML>=6.0
+pyperclip>=1.8
+
+# ── Makro sentiment (opsiyonel, yoksa NEUTRAL varsayılır) ─────────
+
+# ── İndikatör motoru (Adım 1 entegrasyonu) ───────────────────────
+# numpy<2.0 GEREKMEZ — strategy_core.py uyumluluk yamasını kendisi uygular.
+# Python 3.13 + numpy 2.x üzerinde sorunsuz çalışır.
+pandas-ta>=0.3.14b

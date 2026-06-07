@@ -1,0 +1,62 @@
+mode:
+  top_n: 20
+  interval: 5m
+  shard_size: 20
+  preload_candles: 1000
+mtf:
+  enabled: true
+  htf_interval: 1h
+  htf_long_min: 55
+  htf_short_max: 45
+  preload_candles_htf: 500
+risk:
+  take_profit_min_pct: 4
+  hard_stop_pct: 2
+  use_atr_stop: true
+  atr_multiplier: 2.5
+  max_stop_pct: 3
+  use_trailing: true
+  trailing_step_pct: 1
+  min_hold_minutes: 60
+  risk_per_trade_pct: 3
+  min_profit_close_pct: 2
+thresholds:
+  score_long_open: 80
+  score_short_open: 5
+  score_close: 30
+limits:
+  max_trades_per_day: 8
+  max_open_positions: 3
+  daily_target_pct: 10
+  max_hold_hours: 48
+  daily_loss_limit_pct: 3
+pyramiding:
+  enabled: false
+  step_pct: 15
+  max_steps: 3
+misc:
+  starting_equity_usdt: 1000
+  volume_burst_multiplier: 2
+  min_notional_usdt: 30000
+  oco_enabled: true
+  commission_pct: 0.04
+  slippage_pct: 0.03
+btc_filter:
+  enabled: true
+  lookback_candles: 4
+  drop_pct: 1.5
+adx_filter:
+  enabled: false
+  threshold: 25
+partial_tp:
+  enabled: true
+  tp1_r_mult: 1
+  close_pct: 0.5
+auto_symbol_filter:
+  enabled: true
+  rolling_window: 10
+  min_trades: 5
+  tier1_pnl: -30
+  tier2_pnl: -60
+  tier3_pnl: -100
+  min_multiplier: 0.25
