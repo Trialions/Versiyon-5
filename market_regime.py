@@ -123,8 +123,6 @@ class MarketRegimeDetector:
         if bearish_ema:
             regime = self.BEARISH
         # EMA50 altına düşüş de BEARISH sayılır
-        elif price < ema_s:
-            regime = self.BEARISH
         elif atr_percentile < 20:
             regime = self.KONSOL
 
