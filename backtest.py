@@ -3,6 +3,10 @@
 #   - Slippage desteği eklendi (config: slippage_pct)
 #   - Out-of-sample test: --oos flag ile %70 train / %30 test ayrımı
 #   - OOS overfitting uyarısı (train/test win rate farkı)
+# YENİLİKLER v6→v7:
+#   - funding_filter: geçmiş BTC funding rate verisiyle giriş filtresi
+#   - quality_score: 0-10 puan sistemi, yarı/tam pozisyon kararı
+#   - adaptive_risk: ardışık kayıptan sonra kademeli pozisyon küçültme
 import time
 import csv
 import json
@@ -26,6 +30,10 @@ BINANCE_API   = "https://api.binance.com"
 REQUEST_DELAY = 0.12
 CACHE_DIR     = Path(_SCRIPT_DIR) / "backtest_data"
 
+
+# ──────────────────────────────────────────────────────────────
+# Cache
+# ──────────────────────────────────────────────────────────────
 
 def _cache_path(symbol, interval, days, start_date=None, end_date=None):
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -57,6 +65,10 @@ def _save_cache(symbol, interval, days, candles, start_date=None, end_date=None)
         log_error(f"Cache yazma {symbol}: {e}")
 
 
+# ──────────────────────────────────────────────────────────────
+# Veri Çekme
+# ──────────────────────────────────────────────────────────────
+
 def fetch_klines(symbol, interval, start_ms, end_ms):
     url     = f"{BINANCE_API}/api/v3/klines"
     candles = []
@@ -86,11 +98,12 @@ def fetch_klines(symbol, interval, start_ms, end_ms):
             break
     return candles
 
+
 def fetch_funding_rates(symbol: str, start_ms: int, end_ms: int) -> dict:
     """8 saatlik funding rate geçmişi. {timestamp_ms: rate} dict döner."""
-    url  = "https://fapi.binance.com/fapi/v1/fundingRate"
-    out  = {}
-    cur  = start_ms
+    url = "https://fapi.binance.com/fapi/v1/fundingRate"
+    out = {}
+    cur = start_ms
     while cur < end_ms:
         try:
             r = requests.get(url, params={
@@ -123,6 +136,10 @@ def _get_funding_at(funding_map: dict, ts_ms: int) -> float:
     return funding_map[max(keys)]
 
 
+# ──────────────────────────────────────────────────────────────
+# Metrik Hesaplama
+# ──────────────────────────────────────────────────────────────
+
 def _max_drawdown(equity_curve):
     if not equity_curve:
         return 0.0
@@ -150,6 +167,10 @@ def _sharpe(equity_curve, risk_free=0.0):
     return round((mean - risk_free) / std * math.sqrt(len(rets)), 3) if std > 0 else 0.0
 
 
+# ──────────────────────────────────────────────────────────────
+# Backtester Sınıfı
+# ──────────────────────────────────────────────────────────────
+
 class Backtester:
     def __init__(self, cfg: dict):
         risk  = cfg.get("risk",       {})
@@ -157,6 +178,7 @@ class Backtester:
         thr   = cfg.get("thresholds", {})
         misc  = cfg.get("misc",       {})
 
+        # ── Temel risk parametreleri ──────────────────────────
         self.starting_equity  = float(misc.get("starting_equity_usdt",    1000.0))
         self.equity           = self.starting_equity
         self.risk_per_trade   = float(risk.get("risk_per_trade_pct",       1.0)) / 100
@@ -169,58 +191,67 @@ class Backtester:
         self.trail_step       = float(risk.get("trailing_step_pct",        1.0)) / 100
         self.min_hold         = int(  risk.get("min_hold_minutes",         60))  * 60
         self.min_profit_close = float(risk.get("min_profit_close_pct",     3.0)) / 100
+
+        # ── Eşikler ──────────────────────────────────────────
         self.score_long_open  = float(thr.get("score_long_open",           80))
         self.score_short_open = float(thr.get("score_short_open",           5))
         self.score_close      = float(thr.get("score_close",               30))
+
+        # ── Limitler ─────────────────────────────────────────
         self.max_open_pos     = int(  lim.get("max_open_positions",         4))
         self.max_trades_day   = int(  lim.get("max_trades_per_day",         8))
         self.daily_target_pct = float(lim.get("daily_target_pct",         10.0)) / 100
         self.max_hold_sec     = int(  lim.get("max_hold_hours",             48)) * 3600
         self.daily_loss_limit = float(lim.get("daily_loss_limit_pct",      5.0)) / 100
+
+        # ── Misc ─────────────────────────────────────────────
         self.vol_mult         = float(misc.get("volume_burst_multiplier",   2.0))
         self.min_notional     = float(misc.get("min_notional_usdt",     30000.0))
         self.commission       = float(misc.get("commission_pct",            0.04)) / 100
         self.slippage         = float(misc.get("slippage_pct",              0.03)) / 100
 
+        # ── BTC Filtresi ──────────────────────────────────────
         btc_f = cfg.get("btc_filter", {})
         self.btc_filter_enabled  = bool( btc_f.get("enabled",        True))
         self.btc_filter_lookback = int(  btc_f.get("lookback_candles", 4))
         self.btc_filter_drop_pct = float(btc_f.get("drop_pct",         1.5)) / 100
+
+        # ── ADX Filtresi ──────────────────────────────────────
         adx_f = cfg.get("adx_filter", {})
         self.adx_filter_enabled   = bool( adx_f.get("enabled",    False))
         self.adx_filter_threshold = float(adx_f.get("threshold",  25.0))
+
+        # ── Partial TP ────────────────────────────────────────
         ptp = cfg.get("partial_tp", {})
         self.ptp_enabled   = bool( ptp.get("enabled",    True))
         self.ptp_r_mult    = float(ptp.get("tp1_r_mult", 0.75))
         self.ptp_close_pct = float(ptp.get("close_pct",  0.50))
+
+        # ── Funding Filter ────────────────────────────────────
         fr = cfg.get("funding_filter", {})
-        self.fr_enabled    = bool( fr.get("enabled",     True))
-        self.fr_long_max   = float(fr.get("long_max",    0.0005))
-        self.fr_short_min  = float(fr.get("short_min",  -0.0005))
-        self._funding_map  = {}
-        ar = cfg.get("adaptive_risk", {})
-        self.ar_enabled       = bool( ar.get("enabled",        True))
-        self.ar_loss3_mult    = float(ar.get("loss3_mult",     0.75))
-        self.ar_loss5_mult    = float(ar.get("loss5_mult",     0.50))
-        self.ar_loss8_mult    = float(ar.get("loss8_mult",     0.25))
-        qs = cfg.get("quality_score", {})
-        self.qs_enabled      = bool(qs.get("enabled",      False))
-        self.qs_min_half     = float(qs.get("min_half_pos", 5.0))
-        self.qs_min_full     = float(qs.get("min_full_pos", 6.0))
-        self._consec_losses   = 0
-        qs = cfg.get("quality_score", {})
-        self.qs_enabled   = bool( qs.get("enabled",      False))
-        self.qs_min_half  = float(qs.get("min_half_pos",  5.0))
-        self.qs_min_full  = float(qs.get("min_full_pos",  6.0))
+        self.fr_enabled   = bool( fr.get("enabled",    False))
+        self.fr_long_max  = float(fr.get("long_max",   0.0005))
+        self.fr_short_min = float(fr.get("short_min", -0.0005))
+        self._funding_map = {}   # run_backtest tarafından doldurulur
 
-        ar = cfg.get("adaptive_risk", {})
-        self.ar_enabled    = bool( ar.get("enabled",     False))
-        self.ar_loss3_mult = float(ar.get("loss3_mult",  0.75))
-        self.ar_loss5_mult = float(ar.get("loss5_mult",  0.50))
-        self.ar_loss8_mult = float(ar.get("loss8_mult",  0.25))
-        self.sym_mgr  = SymbolManager(cfg)
-        self.regime   = MarketRegimeDetector(cfg)
+        # ── Quality Score ─────────────────────────────────────
+        qs = cfg.get("quality_score", {})
+        self.qs_enabled  = bool( qs.get("enabled",      False))
+        self.qs_min_half = float(qs.get("min_half_pos",  5.0))
+        self.qs_min_full = float(qs.get("min_full_pos",  6.0))
 
+        # ── Adaptive Risk ─────────────────────────────────────
+        ar = cfg.get("adaptive_risk", {})
+        self.ar_enabled    = bool( ar.get("enabled",    False))
+        self.ar_loss3_mult = float(ar.get("loss3_mult", 0.75))
+        self.ar_loss5_mult = float(ar.get("loss5_mult", 0.50))
+        self.ar_loss8_mult = float(ar.get("loss8_mult", 0.25))
+
+        # ── Modüller ──────────────────────────────────────────
+        self.sym_mgr = SymbolManager(cfg)
+        self.regime  = MarketRegimeDetector(cfg)
+
+        # ── State ─────────────────────────────────────────────
         self.btc_closes       = []
         self.open_positions   = {}
         self.trades           = []
@@ -229,7 +260,11 @@ class Backtester:
         self.last_day         = ""
         self.daily_fired      = False
         self.equity_curve     = [(0, self.starting_equity)]
-        self.consecutive_losses = 0
+        self.consec_losses    = 0   # adaptive_risk için ardışık kayıp sayacı
+
+    # ──────────────────────────────────────────────────────────
+    # Yardımcı Metodlar
+    # ──────────────────────────────────────────────────────────
 
     def _lot(self, price, sl_pct=None):
         sl_pct    = sl_pct or self.sl_pct
@@ -283,52 +318,49 @@ class Backtester:
         if side == "SHORT" and chg >=  self.btc_filter_drop_pct:
             return False
         return True
-    def _quality_score(self, symbol: str, result: dict, side: str) -> int:
-        """
-        0-10 arası kalite puanı.
-        < qs_min_half  → işlem yok
-        qs_min_half..qs_min_full → yarım pozisyon (qty * 0.5)
-        >= qs_min_full → tam pozisyon
-        """
-        if not self.qs_enabled:
-            return 10
-        score = 0
-        comp  = result.get("components", {})
 
-        # HTF uyumu +2
-        htf = comp.get("htf_score", 50.0)
+    def _quality_score(self, result: dict, side: str) -> int:
+        """
+        0-10 arası trade kalite puanı hesaplar.
+        Rejime göre dinamik eşikler:
+          TREND   → min_half=4, min_full=5
+          KONSOL  → min_half=5, min_full=7  (config varsayılanı)
+          BEARISH → min_half=7, min_full=9
+        Dönüş: hesaplanan puan (int)
+        Karar için self.qs_min_half / self.qs_min_full kullanılır.
+        """
+        comp  = result.get("components", {})
+        score = 0
+
+        # HTF uyumu +2 (backtest'te HTF verisi yok → 0, konservatif)
+        htf = comp.get("htf_score", 0.0)
         if side == "LONG"  and htf >= 55: score += 2
         if side == "SHORT" and htf <= 45: score += 2
 
-        # Volatilite uygun +2 (ATR ne çok düşük ne çok yüksek)
+        # ATR aralığı uygun +2
         atr_pct = comp.get("atr_pct", 0.0)
         if 0.3 <= atr_pct <= 3.0: score += 2
 
-        # Rejim bullish +2
+        # Rejim +2 / +1
         regime = self.regime._last_regime
-        if regime == "TREND":  score += 2
+        if   regime == "TREND":  score += 2
         elif regime == "KONSOL": score += 1
 
-        # Hacim artışı +2
-        vol_ratio = comp.get("volume", 50.0)
-        if vol_ratio >= 65: score += 2
-        elif vol_ratio >= 55: score += 1
+        # Hacim artışı +2 / +1
+        vol = comp.get("volume", 50.0)
+        if   vol >= 65: score += 2
+        elif vol >= 55: score += 1
 
         # BTC trend uyumu +2
         if self._btc_trend_ok(side): score += 2
 
-        regime = self.regime._last_regime
-        if regime == "TREND":
-            self.qs_min_half = 4
-            self.qs_min_full = 5
-        elif regime == "BEARISH":
-            self.qs_min_half = 7
-            self.qs_min_full = 9
-        else:  # KONSOL
-            self.qs_min_half = 5
-            self.qs_min_full = 7
+        # Rejime göre dinamik eşikleri güncelle
+        if   regime == "TREND":   self.qs_min_half, self.qs_min_full = 4, 5
+        elif regime == "BEARISH": self.qs_min_half, self.qs_min_full = 7, 9
+        else:                     self.qs_min_half, self.qs_min_full = 5, 7
+
         return score
-    
+
     def _exit_reason(self, pos, price, change, score):
         pos_sl = pos.get("sl_pct", self.sl_pct)
         if change <= -pos_sl:
@@ -344,6 +376,10 @@ class Backtester:
             if self.trail and locked is not None and change < locked - self.trail_step:
                 return "Trail"
         return None
+
+    # ──────────────────────────────────────────────────────────
+    # Ana Adım
+    # ──────────────────────────────────────────────────────────
 
     def step(self, symbol, candle, prices, highs, lows, volumes):
         price  = candle["close"]
@@ -404,6 +440,7 @@ class Backtester:
                 locked = pos.get("trail_locked")
                 if locked is None or change > locked + self.trail_step:
                     pos["trail_locked"] = change
+
             if age >= self.min_hold:
                 reason = self._exit_reason(pos, price, change, score)
                 if reason and reason != "SL":
@@ -412,10 +449,6 @@ class Backtester:
 
         # ── Yeni pozisyon kontrol kapıları ─────────────────────
         if not self.regime.is_open():                     return
-        if self.fr_enabled and self._funding_map:
-            fr = _get_funding_at(self._funding_map, ts_ms)
-            if side == "LONG"  and fr >  self.fr_long_max:  return
-            if side == "SHORT" and fr <  self.fr_short_min: return
         if len(self.open_positions) >= self.max_open_pos: return
         if self.trade_count_day >= self.max_trades_day:   return
         if self._daily_target_hit():                      return
@@ -445,10 +478,18 @@ class Backtester:
             return
         if not self._btc_trend_ok(side):
             return
+
         adx_val = result.get("components", {}).get("adx", 0.0)
         if self.adx_filter_enabled and adx_val > 0 and adx_val < self.adx_filter_threshold:
             return
 
+        # ── Funding Filter (side belirlendikten sonra) ─────────
+        if self.fr_enabled and self._funding_map:
+            fr_rate = _get_funding_at(self._funding_map, ts_ms)
+            if side == "LONG"  and fr_rate >  self.fr_long_max:  return
+            if side == "SHORT" and fr_rate <  self.fr_short_min: return
+
+        # ── ATR Stop Hesapla ───────────────────────────────────
         if self.use_atr_stop and "atr_pct" in result.get("components", {}):
             atr_pct_val = result["components"]["atr_pct"] / 100
             final_sl    = min(atr_pct_val * self.atr_multiplier, self.max_stop_pct)
@@ -456,61 +497,49 @@ class Backtester:
         else:
             final_sl = self.sl_pct
 
-        qs = self._quality_score(symbol, result, side)
-        if qs < self.qs_min_half:
-            return
+        # ── Quality Score Filtresi ─────────────────────────────
         if self.qs_enabled:
-            qs_pts = 0
-            comp   = result.get("components", {})
-            atr_pct_v = comp.get("atr_pct", 0.0)
-            if 0.3 <= atr_pct_v <= 3.0:          qs_pts += 1
-            rsi_v = comp.get("rsi", 50.0)
-            if side == "LONG"  and rsi_v >= 55:   qs_pts += 2
-            elif side == "SHORT" and rsi_v <= 45: qs_pts += 2
-            macd_v = comp.get("macd", 50.0)
-            if side == "LONG"  and macd_v >= 55:  qs_pts += 2
-            elif side == "SHORT" and macd_v <= 45:qs_pts += 2
-            regime_name = self.regime._last_regime
-            if regime_name == "TREND":            qs_pts += 2
-            elif regime_name == "KONSOL":         qs_pts += 1
-            vol_v = comp.get("volume", 50.0)
-            if vol_v >= 60.0:                     qs_pts += 1
+            qs_pts = self._quality_score(result, side)
             if qs_pts < self.qs_min_half:
                 return   # kalite çok düşük → işlem yok
             qs_size_mult = 1.0 if qs_pts >= self.qs_min_full else 0.5
+        else:
+            qs_size_mult = 1.0
 
+        # ── Pozisyon Boyutu ────────────────────────────────────
         qty = self._lot(price, sl_pct=final_sl)
         qty *= self.sym_mgr.size_multiplier(symbol)
         qty *= self.regime.size_multiplier()
-        if self.qs_enabled:
-            qty *= qs_size_mult
+        qty *= qs_size_mult
+
+        # ── Adaptive Risk ──────────────────────────────────────
         if self.ar_enabled:
-            if   self.consecutive_losses >= 8: qty *= self.ar_loss8_mult
-            elif self.consecutive_losses >= 5: qty *= self.ar_loss5_mult
-            elif self.consecutive_losses >= 3: qty *= self.ar_loss3_mult
-        if self.ar_enabled:
-            if self._consec_losses >= 8:
-                qty *= self.ar_loss8_mult
-            elif self._consec_losses >= 5:
-                qty *= self.ar_loss5_mult
-            elif self._consec_losses >= 3:
-                qty *= self.ar_loss3_mult
-        if qs < self.qs_min_full:
-            qty *= 0.5
-        comp = result.get("components", {})
+            if   self.consec_losses >= 8: qty *= self.ar_loss8_mult
+            elif self.consec_losses >= 5: qty *= self.ar_loss5_mult
+            elif self.consec_losses >= 3: qty *= self.ar_loss3_mult
+
+        # ── Pozisyonu Aç ───────────────────────────────────────
+        comp      = result.get("components", {})
         vol_ratio = round(volumes[-1] / (sum(volumes[-20:-1]) / 19), 2) if len(volumes) >= 20 else 0.0
         self.open_positions[symbol] = {
-            "side":    side,   "entry":   price,
-            "qty":     qty,    "sl_pct":  final_sl,
-            "ts_open": ts_sec, "score":   score,
-            "atr_pct":    round(comp.get("atr_pct",  0.0), 3),
-            "adx":        round(comp.get("adx",       0.0), 1),
-            "rsi":        round(comp.get("rsi",        0.0), 1),
-            "htf_score":  round(comp.get("htf_score", 0.0), 1),
-            "vol_ratio":  vol_ratio,
-            "btc_trend":  1 if self._btc_trend_ok(side) else 0,
+            "side":      side,
+            "entry":     price,
+            "qty":       qty,
+            "sl_pct":    final_sl,
+            "ts_open":   ts_sec,
+            "score":     score,
+            "atr_pct":   round(comp.get("atr_pct",  0.0), 3),
+            "adx":       round(comp.get("adx",       0.0), 1),
+            "rsi":       round(comp.get("rsi",        0.0), 1),
+            "htf_score": round(comp.get("htf_score", 0.0), 1),
+            "vol_ratio": vol_ratio,
+            "btc_trend": 1 if self._btc_trend_ok(side) else 0,
         }
         self.trade_count_day += 1
+
+    # ──────────────────────────────────────────────────────────
+    # Pozisyon Kapat
+    # ──────────────────────────────────────────────────────────
 
     def _close(self, symbol, price, change, reason, ts_ms, close_qty=None):
         pos = self.open_positions.get(symbol)
@@ -523,6 +552,7 @@ class Backtester:
             pos["qty"] = full_qty - qty
         else:
             self.open_positions.pop(symbol, None)
+
         entry    = pos["entry"]
         gross    = ((price - entry) if pos["side"] == "LONG"
                     else (entry - price)) * qty
@@ -562,16 +592,11 @@ class Backtester:
 
         if not partial:
             self.sym_mgr.record_trade(symbol, net)
-        if not partial:
+            # Adaptive risk sayacı güncelle
             if net < 0:
-                self.consecutive_losses += 1
+                self.consec_losses += 1
             else:
-                self.consecutive_losses = 0
-        if not partial and self.ar_enabled:
-            if net < 0:
-                self._consec_losses += 1
-            else:
-                self._consec_losses = 0
+                self.consec_losses = 0
 
     def force_close_all(self, last_prices):
         for sym, pos in list(self.open_positions.items()):
@@ -581,6 +606,10 @@ class Backtester:
             self._close(sym, price, change, "EndOfTest",
                         int(time.time() * 1000))
 
+
+# ──────────────────────────────────────────────────────────────
+# Rapor
+# ──────────────────────────────────────────────────────────────
 
 def generate_report(trades, starting_equity, final_equity,
                     equity_curve, out_dir, label=""):
@@ -601,22 +630,22 @@ def generate_report(trades, starting_equity, final_equity,
     wins   = [t for t in trades if t["net_pnl"] > 0]
     losses = [t for t in trades if t["net_pnl"] <= 0]
     total  = len(trades)
-    win_rate   = len(wins) / total * 100 if total else 0
-    net_pnl    = sum(t["net_pnl"] for t in trades)
-    total_ret  = (final_equity - starting_equity) / starting_equity * 100
+    win_rate    = len(wins) / total * 100 if total else 0
+    net_pnl     = sum(t["net_pnl"] for t in trades)
+    total_ret   = (final_equity - starting_equity) / starting_equity * 100
     commissions = sum(t["commission"] for t in trades)
     slippages   = sum(t["slippage"]   for t in trades)
-    avg_win    = sum(t["net_pnl"] for t in wins)   / len(wins)   if wins   else 0
-    avg_loss   = sum(t["net_pnl"] for t in losses) / len(losses) if losses else 0
-    rr         = abs(avg_win / avg_loss) if avg_loss else 0
-    max_gain   = max(t["net_pnl"] for t in trades)
-    max_loss   = min(t["net_pnl"] for t in trades)
-    avg_hold   = sum(t["hold_min"] for t in trades) / total if total else 0
-    max_dd     = _max_drawdown(equity_curve)
-    sharpe     = _sharpe(equity_curve)
-    recovery   = round(net_pnl / (max_dd / 100 * starting_equity), 2) if max_dd > 0 else "∞"
+    avg_win     = sum(t["net_pnl"] for t in wins)   / len(wins)   if wins   else 0
+    avg_loss    = sum(t["net_pnl"] for t in losses) / len(losses) if losses else 0
+    rr          = abs(avg_win / avg_loss) if avg_loss else 0
+    max_gain    = max(t["net_pnl"] for t in trades)
+    max_loss    = min(t["net_pnl"] for t in trades)
+    avg_hold    = sum(t["hold_min"] for t in trades) / total if total else 0
+    max_dd      = _max_drawdown(equity_curve)
+    sharpe      = _sharpe(equity_curve)
+    recovery    = round(net_pnl / (max_dd / 100 * starting_equity), 2) if max_dd > 0 else "∞"
 
-    streak = consec_win = consec_loss = cur_w = cur_l = 0
+    consec_win = consec_loss = cur_w = cur_l = 0
     for t in trades:
         if t["net_pnl"] > 0:
             cur_w += 1; cur_l = 0
@@ -725,6 +754,10 @@ def generate_report(trades, starting_equity, final_equity,
     }
 
 
+# ──────────────────────────────────────────────────────────────
+# Parametre Optimizasyonu
+# ──────────────────────────────────────────────────────────────
+
 PARAM_GRID = {
     "score_long_open":     [78, 83, 88],
     "score_short_open":    [5, 10, 15],
@@ -811,8 +844,8 @@ def run_parameter_search(symbols, interval, days, base_cfg,
         net    = sum(x["net_pnl"] for x in t)
         dd     = _max_drawdown(bt.equity_curve)
         sharpe = _sharpe(bt.equity_curve)
-        results.append({"params": params, "net_pnl": round(net,2),
-                        "win_rate": round(wr,1), "max_dd": dd,
+        results.append({"params": params, "net_pnl": round(net, 2),
+                        "win_rate": round(wr, 1), "max_dd": dd,
                         "sharpe": sharpe, "trades": total_t})
         bar = "#" * int(i / total * 30)
         print(f"  [{i:3}/{total}] {bar:<30}  "
@@ -834,7 +867,7 @@ def run_parameter_search(symbols, interval, days, base_cfg,
     print(f"  Train  → WR=%{best['win_rate']:.1f}  PnL=${best['net_pnl']:+.0f}  "
           f"DD=%{best['max_dd']:.1f}  Sharpe={best['sharpe']}")
 
-    if test_tl and test_tl:
+    if test_tl:
         bt2 = Backtester(_build_cfg_variant(base_cfg, best["params"]))
         lp2 = _run_timeline(bt2, test_tl, all_candles)
         bt2.force_close_all(lp2)
@@ -865,6 +898,10 @@ def run_parameter_search(symbols, interval, days, base_cfg,
     return best
 
 
+# ──────────────────────────────────────────────────────────────
+# Ana Backtest Çalıştırıcı
+# ──────────────────────────────────────────────────────────────
+
 def run_backtest(symbols, interval, days, cfg, out_dir,
                  start_date=None, end_date=None, optimize=False,
                  save_config=None, oos=False):
@@ -885,6 +922,7 @@ def run_backtest(symbols, interval, days, cfg, out_dir,
     print(f"  Bitis      : {datetime.utcfromtimestamp(end_ms/1000).strftime('%Y-%m-%d')}")
     print(f"  Cache      : {CACHE_DIR}/\n")
 
+    # ── Kline verisi indir ─────────────────────────────────────
     all_candles = {}
     for i, sym in enumerate(symbols, 1):
         cached = _load_cache(sym, interval, days, start_date, end_date)
@@ -911,12 +949,16 @@ def run_backtest(symbols, interval, days, cfg, out_dir,
                              save_best_to=save_config,
                              oos_split=0.70 if oos else 1.0)
         return
-            # BTC funding rate geçmişini çek
-    print(f"  BTC funding rate yükleniyor...")
-    funding_map = fetch_funding_rates("BTCUSDT", start_ms, end_ms)
-    print(f"  {len(funding_map)} funding kaydı yüklendi")
 
+    # ── Funding rate geçmişini çek (funding_filter açıksa) ────
+    fr_cfg = cfg.get("funding_filter", {})
+    funding_map = {}
+    if fr_cfg.get("enabled", False):
+        print(f"  BTC funding rate yükleniyor...")
+        funding_map = fetch_funding_rates("BTCUSDT", start_ms, end_ms)
+        print(f"  {len(funding_map)} funding kaydı yüklendi")
 
+    # ── Zaman eksenini oluştur ─────────────────────────────────
     print(f"\n  Zaman ekseni olusturuluyor...")
     timeline = []
     for sym, candles in all_candles.items():
@@ -957,6 +999,10 @@ def run_backtest(symbols, interval, days, cfg, out_dir,
     generate_report(bt.trades, bt.starting_equity, bt.equity,
                     bt.equity_curve, out_dir)
 
+
+# ──────────────────────────────────────────────────────────────
+# CLI
+# ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Kripto Trade Botu - Backtest v6")
