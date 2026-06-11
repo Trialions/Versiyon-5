@@ -471,9 +471,11 @@ class Backtester:
                 if score > self.score_short_open / 2: return
 
         sentiment = self._get_btc_sentiment()
-        side      = None
-        if score >= self.score_long_open  and sentiment != "BEARISH":  side = "LONG"
-        elif score <= self.score_short_open and sentiment != "BULLISH": side = "SHORT"
+        side = None
+        if score >= self.score_long_open and sentiment != "BEARISH":
+            side = "LONG"
+        elif self.score_short_open < 100 and score <= self.score_short_open and sentiment != "BULLISH":
+            side = "SHORT"
         if not side:
             return
         if not self._btc_trend_ok(side):
