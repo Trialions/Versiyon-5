@@ -308,7 +308,7 @@ class Backtester:
         return self.daily_pnl <= -(self.equity * self.daily_loss_limit)
 
     def _get_btc_sentiment(self):
-        if len(self.btc_closes) < 50:
+        if len(self.btc_closes) < 210:
             return "NEUTRAL"
         closes = self.btc_closes[-100:]
         k20, k50 = 2 / 21, 2 / 51
@@ -565,7 +565,7 @@ class Backtester:
         if self.use_atr_stop and "atr_pct" in result.get("components", {}):
             atr_pct_val = result["components"]["atr_pct"] / 100
             final_sl    = min(atr_pct_val * self.atr_multiplier, self.max_stop_pct)
-            final_sl    = max(final_sl, 0.005)
+            final_sl    = max(final_sl, 0.015)
         else:
             final_sl = self.sl_pct
 
