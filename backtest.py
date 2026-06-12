@@ -388,9 +388,9 @@ class Backtester:
         # BTC trend uyumu +2
         if self._btc_trend_ok(side): score += 2
 
-        # Rejime göre dinamik eşikler
-        if   regime == "TREND":   self.qs_min_half, self.qs_min_full = 4, 5
-        elif regime == "BEARISH": self.qs_min_half, self.qs_min_full = 7, 9
+        # Rejime göre dinamik eşikler — daha sıkı
+        if   regime == "TREND":   self.qs_min_half, self.qs_min_full = 6, 8
+        elif regime == "BEARISH": self.qs_min_half, self.qs_min_full = 9, 10
         else:                     self.qs_min_half, self.qs_min_full = self._qs_half_cfg, self._qs_full_cfg
 
         return score
@@ -571,6 +571,7 @@ class Backtester:
             final_sl = self.sl_pct
 
         # ── Quality Score Filtresi ─────────────────────────────
+        qs_pts = 0
         if self.qs_enabled:
             self._last_qs_symbol = symbol
             qs_pts = self._quality_score(result, side)
@@ -587,28 +588,41 @@ class Backtester:
         qty *= qs_size_mult
 
         # ── Adaptive Risk ──────────────────────────────────────
+        ar_mult = 1.0
         if self.ar_enabled:
-            if   self.consec_losses >= 8: qty *= self.ar_loss8_mult
-            elif self.consec_losses >= 5: qty *= self.ar_loss5_mult
-            elif self.consec_losses >= 3: qty *= self.ar_loss3_mult
+            if   self.consec_losses >= 8: ar_mult = self.ar_loss8_mult
+            elif self.consec_losses >= 5: ar_mult = self.ar_loss5_mult
+            elif self.consec_losses >= 3: ar_mult = self.ar_loss3_mult
+            qty *= ar_mult
+
+        # ── Funding rate log için ──────────────────────────────
+        fr_rate = _get_funding_at(self._funding_map, ts_ms) if self._funding_map else 0.0
+        fr_ok   = not (self.fr_enabled and (
+            (side == "LONG"  and fr_rate > self.fr_long_max) or
+            (side == "SHORT" and fr_rate < self.fr_short_min)
+        ))
 
         # ── Pozisyonu Aç ───────────────────────────────────────
         comp      = result.get("components", {})
         vol_ratio = round(volumes[-1] / (sum(volumes[-20:-1]) / 19), 2) if len(volumes) >= 20 else 0.0
         htf_sc_log = round(self._htf_score(symbol), 1)
         self.open_positions[symbol] = {
-            "side":      side,
-            "entry":     price,
-            "qty":       qty,
-            "sl_pct":    final_sl,
-            "ts_open":   ts_sec,
-            "score":     score,
-            "atr_pct":   round(comp.get("atr_pct",  0.0), 3),
-            "adx":       round(comp.get("adx",       0.0), 1),
-            "rsi":       round(comp.get("rsi",        0.0), 1),
-            "htf_score": htf_sc_log,
-            "vol_ratio": vol_ratio,
-            "btc_trend": 1 if self._btc_trend_ok(side) else 0,
+            "side":         side,
+            "entry":        price,
+            "qty":          qty,
+            "sl_pct":       final_sl,
+            "ts_open":      ts_sec,
+            "score":        score,
+            "atr_pct":      round(comp.get("atr_pct",  0.0), 3),
+            "adx":          round(comp.get("adx",       0.0), 1),
+            "rsi":          round(comp.get("rsi",        0.0), 1),
+            "htf_score":    htf_sc_log,
+            "vol_ratio":    vol_ratio,
+            "btc_trend":    1 if self._btc_trend_ok(side) else 0,
+            "qs_score":     qs_pts,
+            "ar_mult":      round(ar_mult, 2),
+            "funding_rate": round(fr_rate, 6),
+            "funding_ok":   int(fr_ok),
         }
         self.trade_count_day += 1
 
@@ -640,29 +654,33 @@ class Backtester:
         self.equity_curve.append((ts_ms, round(self.equity, 4)))
 
         self.trades.append({
-            "symbol":     symbol,
-            "side":       pos["side"],
-            "entry":      entry,
-            "exit":       price,
-            "qty":        round(qty, 6),
-            "change_pct": round(change * 100, 3),
-            "gross_pnl":  round(gross, 3),
-            "commission": round(comm, 4),
-            "slippage":   round(slippage, 4),
-            "net_pnl":    round(net, 3),
-            "reason":     reason,
-            "partial":    partial,
-            "score":      round(pos["score"], 2),
-            "sl_pct":     round(pos.get("sl_pct", self.sl_pct) * 100, 2),
-            "atr_pct":    pos.get("atr_pct",   0.0),
-            "adx":        pos.get("adx",        0.0),
-            "rsi":        pos.get("rsi",         0.0),
-            "htf_score":  pos.get("htf_score",  0.0),
-            "vol_ratio":  pos.get("vol_ratio",  0.0),
-            "btc_trend":  pos.get("btc_trend",  1),
-            "open_time":  datetime.utcfromtimestamp(pos["ts_open"]).strftime("%Y-%m-%d %H:%M"),
-            "close_time": datetime.utcfromtimestamp(ts_ms / 1000).strftime("%Y-%m-%d %H:%M"),
-            "hold_min":   round((ts_ms / 1000 - pos["ts_open"]) / 60, 1),
+            "symbol":       symbol,
+            "side":         pos["side"],
+            "entry":        entry,
+            "exit":         price,
+            "qty":          round(qty, 6),
+            "change_pct":   round(change * 100, 3),
+            "gross_pnl":    round(gross, 3),
+            "commission":   round(comm, 4),
+            "slippage":     round(slippage, 4),
+            "net_pnl":      round(net, 3),
+            "reason":       reason,
+            "partial":      partial,
+            "score":        round(pos["score"], 2),
+            "sl_pct":       round(pos.get("sl_pct", self.sl_pct) * 100, 2),
+            "atr_pct":      pos.get("atr_pct",      0.0),
+            "adx":          pos.get("adx",           0.0),
+            "rsi":          pos.get("rsi",            0.0),
+            "htf_score":    pos.get("htf_score",     0.0),
+            "vol_ratio":    pos.get("vol_ratio",     0.0),
+            "btc_trend":    pos.get("btc_trend",     1),
+            "qs_score":     pos.get("qs_score",      0),
+            "ar_mult":      pos.get("ar_mult",       1.0),
+            "funding_rate": pos.get("funding_rate",  0.0),
+            "funding_ok":   pos.get("funding_ok",    1),
+            "open_time":    datetime.utcfromtimestamp(pos["ts_open"]).strftime("%Y-%m-%d %H:%M"),
+            "close_time":   datetime.utcfromtimestamp(ts_ms / 1000).strftime("%Y-%m-%d %H:%M"),
+            "hold_min":     round((ts_ms / 1000 - pos["ts_open"]) / 60, 1),
         })
 
         if not partial:
@@ -673,13 +691,13 @@ class Backtester:
             else:
                 self.consec_losses = 0
 
-    def force_close_all(self, last_prices):
+    def force_close_all(self, last_prices, last_ts_ms: int = 0):
+        ts = last_ts_ms if last_ts_ms > 0 else int(time.time() * 1000)
         for sym, pos in list(self.open_positions.items()):
             price  = last_prices.get(sym, pos["entry"])
             mult   = 1 if pos["side"] == "LONG" else -1
             change = (price - pos["entry"]) / pos["entry"] * mult
-            self._close(sym, price, change, "EndOfTest",
-                        int(time.time() * 1000))
+            self._close(sym, price, change, "EndOfTest", ts)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -1237,7 +1255,8 @@ def run_backtest(symbols, interval, days, cfg, out_dir,
             print(f"  Ilerleme: %{pct:.1f} - Acik: {len(bt.open_positions)} "
                   f"Islem: {len(bt.trades)}")
 
-    bt.force_close_all(last_prices)
+    last_ts_ms = timeline[-1][0] if timeline else 0
+    bt.force_close_all(last_prices, last_ts_ms=last_ts_ms)
     generate_report(bt.trades, bt.starting_equity, bt.equity,
                     bt.equity_curve, out_dir,
                     sl_records=bt.sl_records,
