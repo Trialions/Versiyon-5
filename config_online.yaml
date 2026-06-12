@@ -1,11 +1,11 @@
 mode:
   top_n: 20
-  interval: 5m
+  interval: 1h
   shard_size: 20
   preload_candles: 1000
 mtf:
   enabled: true
-  htf_interval: 1h
+  htf_interval: 4h
   htf_long_min: 55
   htf_short_max: 45
   preload_candles_htf: 500
@@ -13,30 +13,30 @@ risk:
   take_profit_min_pct: 4
   hard_stop_pct: 2
   use_atr_stop: true
-  atr_multiplier: 2.5
+  atr_multiplier: 2
   max_stop_pct: 3
   use_trailing: true
   trailing_step_pct: 1
-  min_hold_minutes: 60
+  min_hold_minutes: 120
   risk_per_trade_pct: 3
   min_profit_close_pct: 2
 thresholds:
-  score_long_open: 80
-  score_short_open: 5
-  score_close: 30
+  score_long_open: 85
+  score_short_open: 100
+  score_close: 45
 limits:
   max_trades_per_day: 8
-  max_open_positions: 3
+  max_open_positions: 2
   daily_target_pct: 10
-  max_hold_hours: 48
-  daily_loss_limit_pct: 3
+  max_hold_hours: 72
+  daily_loss_limit_pct: 5
 pyramiding:
   enabled: false
   step_pct: 15
   max_steps: 3
 misc:
   starting_equity_usdt: 1000
-  volume_burst_multiplier: 2
+  volume_burst_multiplier: 1.3
   min_notional_usdt: 30000
   oco_enabled: true
   commission_pct: 0.04
@@ -50,19 +50,19 @@ adx_filter:
   threshold: 25
 partial_tp:
   enabled: true
-  tp1_r_mult: 1
-  close_pct: 0.5
+  tp1_r_mult: 1.5
+  close_pct: 0.3
 quality_score:
-  enabled: true
+  enabled: false
   min_half_pos: 5
-  min_full_pos: 7
+  min_full_pos: 6
 adaptive_risk:
-  enabled: true
+  enabled: false
   loss3_mult: 0.75
-  loss5_mult: 0.50
+  loss5_mult: 0.5
   loss8_mult: 0.25
 funding_filter:
-  enabled: true
+  enabled: false
   long_max: 0.0005
   short_min: -0.0005
 auto_symbol_filter:
@@ -82,4 +82,8 @@ market_regime:
   atr_mult_thresh: 1.8
   vol_window: 20
   vol_burst_mult: 1.5
-  min_candles: 220
+  min_candles: 100
+rsi_filter:
+  enabled: true
+  max_long: 73
+  min_short: 30
