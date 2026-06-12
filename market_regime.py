@@ -53,7 +53,7 @@ class MarketRegimeDetector:
         self.atr_mult_thresh = float(r.get("atr_mult_thresh",  1.8))
         self.vol_window      = int(  r.get("vol_window",        20))
         self.vol_burst_mult  = float(r.get("vol_burst_mult",   1.5))
-        self.min_candles     = int(  r.get("min_candles",      50))
+        self.min_candles     = int(  r.get("min_candles",      210))
 
         self._last_regime    = self.KONSOL
         self._last_detail    = {}
