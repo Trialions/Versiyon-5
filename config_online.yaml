@@ -82,7 +82,7 @@ market_regime:
   atr_mult_thresh: 1.8
   vol_window: 20
   vol_burst_mult: 1.5
-  min_candles: 50
+  min_candles: 210
 rsi_filter:
   enabled: true
   max_long: 73
