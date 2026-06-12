@@ -37,6 +37,29 @@ _PRELOAD_HTF : int     = 500
 _score_cache      : dict = {}   # {symbol: score}
 _score_cache_tick : int  = 0    # kaçıncı iterasyon
 _SCORE_CACHE_TTL  : int  = 30   # kaç iterasyonda bir yenile
+_blacklist_store  : dict = {}   # {symbol: expire_ts} — engine bağımsız kalıcı store
+_BLACKLIST_FILE   = Path(__file__).parent / "blacklist_store.json"
+
+
+def _bl_load():
+    """Disk'ten blacklist yükle, süresi dolmuşları temizle."""
+    global _blacklist_store
+    try:
+        if _BLACKLIST_FILE.exists():
+            data = json.loads(_BLACKLIST_FILE.read_text(encoding="utf-8"))
+            now  = time.time()
+            _blacklist_store = {s: exp for s, exp in data.items() if exp > now}
+    except Exception:
+        _blacklist_store = {}
+
+def _bl_save():
+    """Blacklist'i diske yaz."""
+    try:
+        _BLACKLIST_FILE.write_text(
+            json.dumps(_blacklist_store, ensure_ascii=False), encoding="utf-8"
+        )
+    except Exception:
+        pass
 
 # ── Yardımcılar ───────────────────────────────────────────────
 def _load_symbols(limit: int = 20, file: str = "symbols_top70.json") -> list:
@@ -163,18 +186,26 @@ def get_pnl() -> dict:
 
 # ── Kara Liste API ────────────────────────────────────────────
 def add_to_blacklist(symbol: str, hours: float = 24.0):
+    _blacklist_store[symbol] = float("inf") if hours <= 0 else time.time() + hours * 3600
+    _bl_save()
     if _ENGINE:
         _ENGINE.add_to_blacklist(symbol, hours)
 
 def remove_from_blacklist(symbol: str):
+    _blacklist_store.pop(symbol, None)
+    _bl_save()
     if _ENGINE:
         _ENGINE.remove_from_blacklist(symbol)
 
 def get_blacklist() -> list:
-    if _ENGINE:
-        return _ENGINE.get_blacklist()
-    return []
-
+    now     = time.time()
+    expired = [s for s, exp in list(_blacklist_store.items()) if exp != float("inf") and now >= exp]
+    for s in expired:
+        del _blacklist_store[s]
+    if expired:
+        _bl_save()
+    return [(s, -1 if exp == float("inf") else round((exp - now) / 3600, 1))
+            for s, exp in _blacklist_store.items()]
 
 # ── İstatistik API ────────────────────────────────────────────
 def get_hourly_stats() -> list:
@@ -185,6 +216,7 @@ def get_coin_stats() -> list:
 
 
 # ── Başlat / Durdur ───────────────────────────────────────────
+_bl_load()
 def start_realtime(log_callback):
     global _ENGINE, _FEED, _SYMS
     global _INTERVAL, _INTERVAL_HTF, _SHARD, _PRELOAD, _PRELOAD_HTF
@@ -219,6 +251,11 @@ def start_realtime(log_callback):
     _ENGINE.on_event = lambda etype, payload: log_callback(
         f"[EVENT] {etype}: {payload}"
     )
+    # Mevcut blacklist store'u engine'e aktar
+    for _sym, _exp in list(_blacklist_store.items()):
+        _remaining = (_exp - time.time()) / 3600
+        if _remaining > 0:
+            _ENGINE.add_to_blacklist(_sym, _remaining)
 
     # ── LTF Preload ───────────────────────────────────────────
     log_callback(f"LTF geçmiş veriler ({_INTERVAL}, {_PRELOAD} mum) yükleniyor...")
