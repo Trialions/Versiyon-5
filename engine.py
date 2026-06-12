@@ -31,6 +31,11 @@ class TradeEngine:
         self.adx_filter_enabled   = bool( adx_f.get("enabled",   True))
         self.adx_filter_threshold = float(adx_f.get("threshold", 25.0))
 
+        # ── ATR Minimum Filtresi ──────────────────────────────
+        atr_f = cfg.get("atr_filter", {})
+        self.atr_filter_enabled = bool( atr_f.get("enabled",     False))
+        self.atr_filter_min     = float(atr_f.get("min_atr_pct", 0.8))
+
         # ── RSI Filtresi ──────────────────────────────────────
         rsi_f = self.cfg.get("rsi_filter", {})
         self.rsi_filter_enabled = bool( rsi_f.get("enabled",   True))
@@ -412,6 +417,14 @@ class TradeEngine:
         adx_val = result.get("components", {}).get("adx", 0.0)
         if self.adx_filter_enabled and adx_val > 0 and adx_val < self.adx_filter_threshold:
             return
+
+        # ── ATR Minimum Filtresi ───────────────────────────────
+        if self.atr_filter_enabled:
+            atr_val = result.get("components", {}).get("atr_pct", 0.0)
+            if atr_val < self.atr_filter_min:
+                self._fire("OPEN_BLOCK", cause="ATR_TOO_LOW",
+                           symbol=symbol, atr=round(atr_val, 3))
+                return
 
         # ── RSI Filtresi ───────────────────────────────────────
         if self.rsi_filter_enabled:
