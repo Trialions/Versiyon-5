@@ -506,7 +506,11 @@ class Backtester:
             return
 
         # ── Yeni pozisyon kontrol kapıları ─────────────────────
-        if not self.regime.is_open():                     return
+        if not self.regime.enabled:
+            pass  # modül kapalı → kontrol yok
+        elif not self.regime.is_open():
+            return
+        if len(self.btc_closes) < 50:                    return  # yeterli BTC verisi yok
         if len(self.open_positions) >= self.max_open_pos: return
         if self.trade_count_day >= self.max_trades_day:   return
         if self._daily_target_hit():                      return
