@@ -10,9 +10,6 @@
 # YENİLİKLER v7→v8:
 #   - HTF/MTF entegrasyonu: backtest motoru artık gerçek 4h veri çekip MTF filtresi uyguluyor
 #   - htf_score artık trade kayıtlarında 0.0 değil, gerçek HTF skorunu gösteriyor
-# YENİLİKLER v8→v9:
-#   - sl_post_analysis.csv: Her SL kapanışında sonraki 1h/4h/12h/24h fiyat + tüm parametreler
-#   - candle_store: sembol bazlı son 30 mumu bellekte tutar (post-SL analiz için)
 import time
 import csv
 import json
@@ -23,7 +20,7 @@ import requests
 import argparse
 from pathlib import Path
 from datetime import datetime
-from collections import defaultdict, deque
+from collections import defaultdict
 from strategy_core import score_symbol
 from logger import log_info, log_error
 from symbol_manager import SymbolManager
@@ -35,9 +32,6 @@ _SCRIPT_DIR = _os.path.dirname(_os.path.abspath(__file__))
 BINANCE_API   = "https://api.binance.com"
 REQUEST_DELAY = 0.12
 CACHE_DIR     = Path(_SCRIPT_DIR) / "backtest_data"
-
-# SL sonrası kaç mum bakacağız (1h interval varsayımı)
-SL_POST_CANDLES = 24   # 24 mum = 24h (1h'de), 4h'de 6 mum, vb.
 
 
 # ──────────────────────────────────────────────────────────────
@@ -248,7 +242,7 @@ class Backtester:
         self.qs_enabled      = bool( qs.get("enabled",      False))
         self.qs_min_half     = float(qs.get("min_half_pos",  5.0))
         self.qs_min_full     = float(qs.get("min_full_pos",  6.0))
-        self._qs_half_cfg    = self.qs_min_half
+        self._qs_half_cfg    = self.qs_min_half   # config orijinali — reset için
         self._qs_full_cfg    = self.qs_min_full
 
         # ── Adaptive Risk ─────────────────────────────────────
@@ -263,7 +257,8 @@ class Backtester:
         self.mtf_enabled   = bool( mtf.get("enabled",      True))
         self.mtf_long_min  = float(mtf.get("htf_long_min", 55.0))
         self.mtf_short_max = float(mtf.get("htf_short_max",45.0))
-        self.htf_prices  = {}
+        # HTF fiyat/hacim buffer'ları (run_backtest tarafından doldurulur)
+        self.htf_prices  = {}   # {symbol: deque}
         self.htf_highs   = {}
         self.htf_lows    = {}
         self.htf_volumes = {}
@@ -281,13 +276,8 @@ class Backtester:
         self.last_day         = ""
         self.daily_fired      = False
         self.equity_curve     = [(0, self.starting_equity)]
-        self.consec_losses    = 0
-
-        # ── SL Post-Analysis: sembol bazlı son N mumu tut ─────
-        # {symbol: deque([{"ts": ms, "close": float}, ...])}
-        self.candle_store     = {}   # run_backtest tarafından set edilir
-        # SL kapanışlarında analiz verisi biriktirilir
-        self.sl_records       = []   # generate_report'a iletilir
+        self.consec_losses    = 0   # adaptive_risk için ardışık kayıp sayacı
+        self.sl_records       = []  # SL post-analysis için ham kayıtlar
 
     # ──────────────────────────────────────────────────────────
     # Yardımcı Metodlar
@@ -347,6 +337,10 @@ class Backtester:
         return True
 
     def _htf_score(self, symbol: str) -> float:
+        """
+        HTF buffer'ından o anki skoru hesaplar.
+        Yeterli veri yoksa 50.0 döner (fail-open).
+        """
         prices  = list(self.htf_prices.get( symbol, []))
         highs   = list(self.htf_highs.get(  symbol, []))
         lows    = list(self.htf_lows.get(   symbol, []))
@@ -360,26 +354,41 @@ class Backtester:
             return 50.0
 
     def _quality_score(self, result: dict, side: str) -> int:
+        """
+        0-10 arası trade kalite puanı hesaplar.
+        Rejime göre dinamik eşikler:
+          TREND   → min_half=4, min_full=5
+          KONSOL  → min_half=5, min_full=7  (config varsayılanı)
+          BEARISH → min_half=7, min_full=9
+        Dönüş: hesaplanan puan (int)
+        Karar için self.qs_min_half / self.qs_min_full kullanılır.
+        """
         comp  = result.get("components", {})
         score = 0
 
+        # HTF uyumu +2
         htf = self._htf_score(self._last_qs_symbol) if hasattr(self, '_last_qs_symbol') else 50.0
         if side == "LONG"  and htf >= self.mtf_long_min:  score += 2
         if side == "SHORT" and htf <= self.mtf_short_max: score += 2
 
+        # ATR aralığı uygun +2
         atr_pct = comp.get("atr_pct", 0.0)
         if 0.3 <= atr_pct <= 3.0: score += 2
 
+        # Rejim +2 / +1
         regime = self.regime._last_regime
         if   regime == "TREND":  score += 2
         elif regime == "KONSOL": score += 1
 
+        # Hacim artışı +2 / +1
         vol = comp.get("volume", 50.0)
         if   vol >= 65: score += 2
         elif vol >= 55: score += 1
 
+        # BTC trend uyumu +2
         if self._btc_trend_ok(side): score += 2
 
+        # Rejime göre dinamik eşikler
         if   regime == "TREND":   self.qs_min_half, self.qs_min_full = 4, 5
         elif regime == "BEARISH": self.qs_min_half, self.qs_min_full = 7, 9
         else:                     self.qs_min_half, self.qs_min_full = self._qs_half_cfg, self._qs_full_cfg
@@ -405,66 +414,26 @@ class Backtester:
     def _record_sl_post(self, symbol: str, pos: dict, sl_exit_price: float,
                         sl_pnl: float, sl_ts_ms: int):
         """
-        SL kapanışında o anki pozisyon parametrelerini ve
-        candle_store'dan sonraki mumların fiyatlarını kaydeder.
+        SL kapanışında pozisyon parametrelerini kaydeder.
+        Fiyat sonrası analiz (chg_1h, chg_24h vb.) backtest bittikten
+        SONRA all_candles ile doldurulur — burada sadece ham veri saklanır.
         """
-        store = self.candle_store.get(symbol)
-        if store is None:
-            return
-
-        candles_after = [c for c in store if c["ts"] > sl_ts_ms]
-
-        def _chg(n):
-            """n mum sonraki kapanış fiyatının SL çıkışına göre % değişimi."""
-            if len(candles_after) >= n:
-                p = candles_after[n - 1]["close"]
-                return round((p - sl_exit_price) / sl_exit_price * 100, 3)
-            return None
-
-        chg_1h  = _chg(1)
-        chg_4h  = _chg(4)
-        chg_12h = _chg(12)
-        chg_24h = _chg(24)
-
-        # Verdict: 24h içinde en fazla kaç % yukarı gitti?
-        max_up = None
-        if candles_after:
-            ups = [(c["close"] - sl_exit_price) / sl_exit_price * 100
-                   for c in candles_after[:24]]
-            max_up = round(max(ups), 2) if ups else None
-
-        verdict = "VERI_YOK"
-        if chg_24h is not None:
-            if chg_24h > 3.0:
-                verdict = "ERKEN_SL"
-            elif chg_24h < -1.0:
-                verdict = "SL_DOGRU"
-            else:
-                verdict = "BELIRSIZ"
-
         self.sl_records.append({
-            "symbol":        symbol,
-            "sl_time":       datetime.utcfromtimestamp(sl_ts_ms / 1000).strftime("%Y-%m-%d %H:%M"),
-            "entry":         round(pos["entry"], 6),
-            "sl_exit":       round(sl_exit_price, 6),
-            "sl_pnl":        round(sl_pnl, 3),
-            "sl_pct":        round(pos.get("sl_pct", self.sl_pct) * 100, 2),
-            # Giriş parametreleri
-            "score":         round(pos.get("score",     0.0), 2),
-            "atr_pct":       round(pos.get("atr_pct",   0.0), 3),
-            "adx":           round(pos.get("adx",       0.0), 1),
-            "rsi":           round(pos.get("rsi",       0.0), 1),
-            "htf_score":     round(pos.get("htf_score", 0.0), 1),
-            "vol_ratio":     round(pos.get("vol_ratio", 0.0), 2),
-            "btc_trend":     pos.get("btc_trend", 1),
-            "regime":        self.regime._last_regime,
-            # SL sonrası fiyat değişimleri
-            "chg_1h_pct":    chg_1h,
-            "chg_4h_pct":    chg_4h,
-            "chg_12h_pct":   chg_12h,
-            "chg_24h_pct":   chg_24h,
-            "max_up_24h_pct": max_up,
-            "verdict":       verdict,
+            "symbol":    symbol,
+            "sl_ts_ms":  sl_ts_ms,
+            "sl_time":   datetime.utcfromtimestamp(sl_ts_ms / 1000).strftime("%Y-%m-%d %H:%M"),
+            "entry":     round(pos["entry"], 6),
+            "sl_exit":   round(sl_exit_price, 6),
+            "sl_pnl":    round(sl_pnl, 3),
+            "sl_pct":    round(pos.get("sl_pct", self.sl_pct) * 100, 2),
+            "score":     round(pos.get("score",     0.0), 2),
+            "atr_pct":   round(pos.get("atr_pct",   0.0), 3),
+            "adx":       round(pos.get("adx",       0.0), 1),
+            "rsi":       round(pos.get("rsi",       0.0), 1),
+            "htf_score": round(pos.get("htf_score", 0.0), 1),
+            "vol_ratio": round(pos.get("vol_ratio", 0.0), 2),
+            "btc_trend": pos.get("btc_trend", 1),
+            "regime":    self.regime._last_regime,
         })
 
     # ──────────────────────────────────────────────────────────
@@ -475,10 +444,6 @@ class Backtester:
         price  = candle["close"]
         ts_ms  = candle["open_time"]
         ts_sec = ts_ms / 1000
-
-        # candle_store güncelle (SL post-analysis için)
-        if symbol in self.candle_store:
-            self.candle_store[symbol].append({"ts": ts_ms, "close": price})
 
         if symbol == "BTCUSDT":
             self.btc_closes.append(price)
@@ -506,16 +471,13 @@ class Backtester:
             # SL kontrolü — TP1 sonrası breakeven'a taşınır
             if change <= -pos.get("sl_pct", self.sl_pct):
                 reason = "Breakeven" if pos.get("tp1_done") else "SL"
-                # SL ise post-analysis kaydı oluştur
                 if reason == "SL":
-                    gross   = (price - pos["entry"]) * pos["qty"]
-                    comm    = (pos["entry"] * pos["qty"] + price * pos["qty"]) * self.commission
-                    slip    = price * pos["qty"] * self.slippage
-                    sl_pnl  = gross - comm - slip
-                    self._record_sl_post(symbol, pos, price, sl_pnl, ts_ms)
+                    gross  = (price - pos["entry"]) * pos["qty"]
+                    comm   = (pos["entry"] * pos["qty"] + price * pos["qty"]) * self.commission
+                    slip   = price * pos["qty"] * self.slippage
+                    self._record_sl_post(symbol, pos, price, gross - comm - slip, ts_ms)
                 self._close(symbol, price, change, reason, ts_ms)
                 return
-
             if age >= self.max_hold_sec:
                 self._close(symbol, price, change, "MaxHold", ts_ms)
                 return
@@ -589,7 +551,7 @@ class Backtester:
         if self.adx_filter_enabled and adx_val > 0 and adx_val < self.adx_filter_threshold:
             return
 
-        # ── Funding Filter ─────────────────────────────────────
+        # ── Funding Filter (side belirlendikten sonra) ─────────
         if self.fr_enabled and self._funding_map:
             fr_rate = _get_funding_at(self._funding_map, ts_ms)
             if side == "LONG"  and fr_rate >  self.fr_long_max:  return
@@ -608,7 +570,7 @@ class Backtester:
             self._last_qs_symbol = symbol
             qs_pts = self._quality_score(result, side)
             if qs_pts < self.qs_min_half:
-                return
+                return   # kalite çok düşük → işlem yok
             qs_size_mult = 1.0 if qs_pts >= self.qs_min_full else 0.5
         else:
             qs_size_mult = 1.0
@@ -626,8 +588,8 @@ class Backtester:
             elif self.consec_losses >= 3: qty *= self.ar_loss3_mult
 
         # ── Pozisyonu Aç ───────────────────────────────────────
-        comp       = result.get("components", {})
-        vol_ratio  = round(volumes[-1] / (sum(volumes[-20:-1]) / 19), 2) if len(volumes) >= 20 else 0.0
+        comp      = result.get("components", {})
+        vol_ratio = round(volumes[-1] / (sum(volumes[-20:-1]) / 19), 2) if len(volumes) >= 20 else 0.0
         htf_sc_log = round(self._htf_score(symbol), 1)
         self.open_positions[symbol] = {
             "side":      side,
@@ -700,6 +662,7 @@ class Backtester:
 
         if not partial:
             self.sym_mgr.record_trade(symbol, net)
+            # Adaptive risk sayacı güncelle
             if net < 0:
                 self.consec_losses += 1
             else:
@@ -719,7 +682,8 @@ class Backtester:
 # ──────────────────────────────────────────────────────────────
 
 def generate_report(trades, starting_equity, final_equity,
-                    equity_curve, out_dir, label="", sl_records=None):
+                    equity_curve, out_dir, label="",
+                    sl_records=None, all_candles=None):
     out_dir.mkdir(parents=True, exist_ok=True)
     if not trades:
         print("\n[UYARI] Hiç işlem oluşmadı. Parametreleri gevşet.")
@@ -852,35 +816,107 @@ def generate_report(trades, starting_equity, final_equity,
             ["OrtTutmaDakika",   f"{avg_hold:.1f}"],
         ])
     print(f"  Özet raporu      : {s_csv}")
+    print(sep)
 
-    # ── SL Post-Analysis CSV ───────────────────────────────────
-    if sl_records:
+    # ── SL Post-Analysis ──────────────────────────────────────
+    if sl_records and all_candles:
+        # Her sembol için timestamp→close index oluştur (hızlı arama)
+        sym_candle_index = {}
+        for sym, candles in all_candles.items():
+            # sorted by open_time (zaten sıralı olmalı)
+            sym_candle_index[sym] = candles
+
+        enriched = []
+        for rec in sl_records:
+            sym      = rec["symbol"]
+            sl_ts    = rec["sl_ts_ms"]
+            sl_price = rec["sl_exit"]
+            candles  = sym_candle_index.get(sym, [])
+
+            # SL timestamp'inden sonraki mumları bul
+            after = [c for c in candles if c["open_time"] > sl_ts]
+
+            def _chg(n):
+                if len(after) >= n:
+                    return round((after[n-1]["close"] - sl_price) / sl_price * 100, 3)
+                return None
+
+            chg_1h  = _chg(1)
+            chg_4h  = _chg(4)
+            chg_12h = _chg(12)
+            chg_24h = _chg(24)
+
+            # Sonraki 24 mum içindeki max yükseliş
+            max_up = None
+            if after:
+                ups = [(c["close"] - sl_price) / sl_price * 100 for c in after[:24]]
+                max_up = round(max(ups), 2) if ups else None
+
+            # Min düşüş (devam eden trend var mı?)
+            max_dn = None
+            if after:
+                dns = [(c["close"] - sl_price) / sl_price * 100 for c in after[:24]]
+                max_dn = round(min(dns), 2) if dns else None
+
+            if chg_24h is not None:
+                if chg_24h > 3.0:
+                    verdict = "ERKEN_SL"
+                elif chg_24h < -1.0:
+                    verdict = "SL_DOGRU"
+                else:
+                    verdict = "BELIRSIZ"
+            else:
+                verdict = "VERI_YOK"
+
+            enriched.append({
+                **rec,
+                "chg_1h_pct":    chg_1h,
+                "chg_4h_pct":    chg_4h,
+                "chg_12h_pct":   chg_12h,
+                "chg_24h_pct":   chg_24h,
+                "max_up_24h_pct": max_up,
+                "max_dn_24h_pct": max_dn,
+                "verdict":       verdict,
+            })
+
         sl_csv = out_dir / "sl_post_analysis.csv"
         fieldnames = [
             "symbol", "sl_time", "entry", "sl_exit", "sl_pnl", "sl_pct",
             "score", "atr_pct", "adx", "rsi", "htf_score", "vol_ratio",
             "btc_trend", "regime",
             "chg_1h_pct", "chg_4h_pct", "chg_12h_pct", "chg_24h_pct",
-            "max_up_24h_pct", "verdict",
+            "max_up_24h_pct", "max_dn_24h_pct", "verdict",
         ]
         with open(sl_csv, "w", newline="", encoding="utf-8-sig") as f:
-            w = csv.DictWriter(f, fieldnames=fieldnames, delimiter=";")
+            w = csv.DictWriter(f, fieldnames=fieldnames,
+                               delimiter=";", extrasaction="ignore")
             w.writeheader()
-            w.writerows(sl_records)
+            w.writerows(enriched)
 
-        # Özet istatistik yaz
-        erken  = [r for r in sl_records if r["verdict"] == "ERKEN_SL"]
-        dogru  = [r for r in sl_records if r["verdict"] == "SL_DOGRU"]
-        bel    = [r for r in sl_records if r["verdict"] == "BELIRSIZ"]
-        print(f"\n  SL Sonrası Analiz: {sl_csv}")
-        print(f"    Erken SL (fiyat geri döndü): {len(erken)} (%{len(erken)/len(sl_records)*100:.0f})")
-        print(f"    SL Doğru (fiyat devam etti): {len(dogru)} (%{len(dogru)/len(sl_records)*100:.0f})")
-        print(f"    Belirsiz                   : {len(bel)} (%{len(bel)/len(sl_records)*100:.0f})")
-        if erken:
-            avg_missed = sum(r["chg_24h_pct"] for r in erken if r["chg_24h_pct"]) / len(erken)
-            print(f"    Ort. kaçırılan hareket     : +%{avg_missed:.1f}")
-
-    print(sep)
+        # Konsol özet
+        erken = [r for r in enriched if r["verdict"] == "ERKEN_SL"]
+        dogru = [r for r in enriched if r["verdict"] == "SL_DOGRU"]
+        bel   = [r for r in enriched if r["verdict"] == "BELIRSIZ"]
+        veri_yok = [r for r in enriched if r["verdict"] == "VERI_YOK"]
+        total_sl  = len(enriched)
+        print(f"\n  SL Sonrası Analiz : {sl_csv}")
+        print(f"    Toplam SL        : {total_sl}")
+        if total_sl > 0:
+            print(f"    Erken SL (↑>+3%) : {len(erken):2d} (%{len(erken)/total_sl*100:.0f})"
+                  f"  — fiyat geri döndü, SL çok yakındı")
+            print(f"    SL Doğru (↓<-1%) : {len(dogru):2d} (%{len(dogru)/total_sl*100:.0f})"
+                  f"  — fiyat düşmeye devam etti")
+            print(f"    Belirsiz (±1-3%)  : {len(bel):2d} (%{len(bel)/total_sl*100:.0f})")
+            if veri_yok:
+                print(f"    Veri Yok          : {len(veri_yok):2d}  (backtest sonu yakın)")
+            if erken:
+                avg_missed = sum(r["chg_24h_pct"] for r in erken
+                                 if r["chg_24h_pct"] is not None) / len(erken)
+                avg_max_up = sum(r["max_up_24h_pct"] for r in erken
+                                 if r["max_up_24h_pct"] is not None) / len(erken)
+                print(f"    Ort. kaçırılan   : +%{avg_missed:.1f}  (24h)")
+                print(f"    Ort. max yükseliş: +%{avg_max_up:.1f}  (24h içinde)")
+        print(sep)
 
     return {
         "net_pnl": net_pnl, "win_rate": win_rate, "rr": rr,
@@ -970,7 +1006,7 @@ def run_parameter_search(symbols, interval, days, base_cfg,
         params  = dict(zip(keys, combo))
         cfg     = _build_cfg_variant(base_cfg, params)
         bt      = Backtester(cfg)
-        bt._funding_map = _opt_funding_map
+        bt._funding_map = _opt_funding_map  # funding filter optimize'da da aktif
         lp      = _run_timeline(bt, train_tl, all_candles)
         bt.force_close_all(lp)
         t       = bt.trades
@@ -1106,7 +1142,6 @@ def run_backtest(symbols, interval, days, cfg, out_dir,
                     print("veri yok, atlandi")
         print(f"  HTF yüklendi: {len(all_htf_candles)} sembol\n")
 
-    # ── Funding rate geçmişini çek ─────────────────────────────
     fr_cfg = cfg.get("funding_filter", {})
     funding_map = {}
     if fr_cfg.get("enabled", False):
@@ -1122,6 +1157,14 @@ def run_backtest(symbols, interval, days, cfg, out_dir,
                              funding_map=funding_map)
         return
 
+    # ── Funding rate geçmişini çek (funding_filter açıksa) ────
+    fr_cfg = cfg.get("funding_filter", {})
+    funding_map = {}
+    if fr_cfg.get("enabled", False):
+        print(f"  BTC funding rate yükleniyor...")
+        funding_map = fetch_funding_rates("BTCUSDT", start_ms, end_ms)
+        print(f"  {len(funding_map)} funding kaydı yüklendi")
+
     # ── Zaman eksenini oluştur ─────────────────────────────────
     print(f"\n  Zaman ekseni olusturuluyor...")
     timeline = []
@@ -1131,6 +1174,7 @@ def run_backtest(symbols, interval, days, cfg, out_dir,
     timeline.sort(key=lambda x: x[0])
     print(f"  Toplam {len(timeline):,} mum adimi\n")
 
+    from collections import deque
     WINDOW    = 500
     price_buf = {s: deque(maxlen=WINDOW) for s in all_candles}
     high_buf  = {s: deque(maxlen=WINDOW) for s in all_candles}
@@ -1140,20 +1184,15 @@ def run_backtest(symbols, interval, days, cfg, out_dir,
     bt = Backtester(cfg)
     bt._funding_map = funding_map
 
-    # ── SL post-analysis için candle_store başlat ──────────────
-    # Her sembol için SL sonrası en fazla 30 mumu tutacak deque
-    # (24h analiz için 24 yeterli, 30 biraz pay bırakır)
-    for sym in all_candles:
-        bt.candle_store[sym] = deque(maxlen=30)
-
     # ── HTF buffer'larını Backtester'a bağla ──────────────────
     if htf_enabled and all_htf_candles:
+        from collections import deque as _deque
         HTF_WINDOW = 500
         for sym in all_candles:
-            bt.htf_prices[ sym] = deque(maxlen=HTF_WINDOW)
-            bt.htf_highs[  sym] = deque(maxlen=HTF_WINDOW)
-            bt.htf_lows[   sym] = deque(maxlen=HTF_WINDOW)
-            bt.htf_volumes[sym] = deque(maxlen=HTF_WINDOW)
+            bt.htf_prices[ sym] = _deque(maxlen=HTF_WINDOW)
+            bt.htf_highs[  sym] = _deque(maxlen=HTF_WINDOW)
+            bt.htf_lows[   sym] = _deque(maxlen=HTF_WINDOW)
+            bt.htf_volumes[sym] = _deque(maxlen=HTF_WINDOW)
 
     # HTF timeline'ını önceden işle (pointer mantığı)
     htf_timeline = {}
@@ -1165,7 +1204,7 @@ def run_backtest(symbols, interval, days, cfg, out_dir,
     processed   = 0
 
     for ts, sym, candle in timeline:
-        # HTF buffer güncelle
+        # HTF buffer'ını güncelle: o ana kadar geçmiş HTF mumlarını ekle
         if htf_enabled and sym in htf_timeline:
             ptr      = htf_ptr.get(sym, 0)
             htf_list = htf_timeline[sym]
@@ -1196,7 +1235,8 @@ def run_backtest(symbols, interval, days, cfg, out_dir,
     bt.force_close_all(last_prices)
     generate_report(bt.trades, bt.starting_equity, bt.equity,
                     bt.equity_curve, out_dir,
-                    sl_records=bt.sl_records)
+                    sl_records=bt.sl_records,
+                    all_candles=all_candles)
 
 
 # ──────────────────────────────────────────────────────────────
