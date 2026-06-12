@@ -7,6 +7,9 @@
 #   - funding_filter: geçmiş BTC funding rate verisiyle giriş filtresi
 #   - quality_score: 0-10 puan sistemi, yarı/tam pozisyon kararı
 #   - adaptive_risk: ardışık kayıptan sonra kademeli pozisyon küçültme
+# YENİLİKLER v7→v8:
+#   - HTF/MTF entegrasyonu: backtest motoru artık gerçek 4h veri çekip MTF filtresi uyguluyor
+#   - htf_score artık trade kayıtlarında 0.0 değil, gerçek HTF skorunu gösteriyor
 import time
 import csv
 import json
@@ -247,6 +250,17 @@ class Backtester:
         self.ar_loss5_mult = float(ar.get("loss5_mult", 0.50))
         self.ar_loss8_mult = float(ar.get("loss8_mult", 0.25))
 
+        # ── MTF / HTF ─────────────────────────────────────────
+        mtf = cfg.get("mtf", {})
+        self.mtf_enabled   = bool( mtf.get("enabled",      True))
+        self.mtf_long_min  = float(mtf.get("htf_long_min", 55.0))
+        self.mtf_short_max = float(mtf.get("htf_short_max",45.0))
+        # HTF fiyat/hacim buffer'ları (run_backtest tarafından doldurulur)
+        self.htf_prices  = {}   # {symbol: deque}
+        self.htf_highs   = {}
+        self.htf_lows    = {}
+        self.htf_volumes = {}
+
         # ── Modüller ──────────────────────────────────────────
         self.sym_mgr = SymbolManager(cfg)
         self.regime  = MarketRegimeDetector(cfg)
@@ -319,6 +333,23 @@ class Backtester:
             return False
         return True
 
+    def _htf_score(self, symbol: str) -> float:
+        """
+        HTF buffer'ından o anki skoru hesaplar.
+        Yeterli veri yoksa 50.0 döner (fail-open).
+        """
+        prices  = list(self.htf_prices.get( symbol, []))
+        highs   = list(self.htf_highs.get(  symbol, []))
+        lows    = list(self.htf_lows.get(   symbol, []))
+        volumes = list(self.htf_volumes.get(symbol, []))
+        if len(prices) < 50:
+            return 50.0
+        try:
+            result = score_symbol(prices, highs, lows, volumes)
+            return result["final_score"]
+        except Exception:
+            return 50.0
+
     def _quality_score(self, result: dict, side: str) -> int:
         """
         0-10 arası trade kalite puanı hesaplar.
@@ -332,10 +363,10 @@ class Backtester:
         comp  = result.get("components", {})
         score = 0
 
-        # HTF uyumu +2 (backtest'te HTF verisi yok → 0, konservatif)
-        htf = comp.get("htf_score", 0.0)
-        if side == "LONG"  and htf >= 55: score += 2
-        if side == "SHORT" and htf <= 45: score += 2
+        # HTF uyumu +2
+        htf = self._htf_score(side) if hasattr(self, '_last_qs_symbol') else 0.0
+        if side == "LONG"  and htf >= self.mtf_long_min:  score += 2
+        if side == "SHORT" and htf <= self.mtf_short_max: score += 2
 
         # ATR aralığı uygun +2
         atr_pct = comp.get("atr_pct", 0.0)
@@ -481,6 +512,14 @@ class Backtester:
         if not self._btc_trend_ok(side):
             return
 
+        # ── MTF / HTF Konfirmasyon ─────────────────────────────
+        if self.mtf_enabled:
+            htf_sc = self._htf_score(symbol)
+            if side == "LONG"  and htf_sc < self.mtf_long_min:
+                return
+            if side == "SHORT" and htf_sc > self.mtf_short_max:
+                return
+
         adx_val = result.get("components", {}).get("adx", 0.0)
         if self.adx_filter_enabled and adx_val > 0 and adx_val < self.adx_filter_threshold:
             return
@@ -501,6 +540,7 @@ class Backtester:
 
         # ── Quality Score Filtresi ─────────────────────────────
         if self.qs_enabled:
+            self._last_qs_symbol = symbol
             qs_pts = self._quality_score(result, side)
             if qs_pts < self.qs_min_half:
                 return   # kalite çok düşük → işlem yok
@@ -523,6 +563,7 @@ class Backtester:
         # ── Pozisyonu Aç ───────────────────────────────────────
         comp      = result.get("components", {})
         vol_ratio = round(volumes[-1] / (sum(volumes[-20:-1]) / 19), 2) if len(volumes) >= 20 else 0.0
+        htf_sc_log = round(self._htf_score(symbol), 1)
         self.open_positions[symbol] = {
             "side":      side,
             "entry":     price,
@@ -533,7 +574,7 @@ class Backtester:
             "atr_pct":   round(comp.get("atr_pct",  0.0), 3),
             "adx":       round(comp.get("adx",       0.0), 1),
             "rsi":       round(comp.get("rsi",        0.0), 1),
-            "htf_score": round(comp.get("htf_score", 0.0), 1),
+            "htf_score": htf_sc_log,
             "vol_ratio": vol_ratio,
             "btc_trend": 1 if self._btc_trend_ok(side) else 0,
         }
@@ -924,7 +965,7 @@ def run_backtest(symbols, interval, days, cfg, out_dir,
     print(f"  Bitis      : {datetime.utcfromtimestamp(end_ms/1000).strftime('%Y-%m-%d')}")
     print(f"  Cache      : {CACHE_DIR}/\n")
 
-    # ── Kline verisi indir ─────────────────────────────────────
+    # ── LTF Kline verisi indir ─────────────────────────────────
     all_candles = {}
     for i, sym in enumerate(symbols, 1):
         cached = _load_cache(sym, interval, days, start_date, end_date)
@@ -944,6 +985,30 @@ def run_backtest(symbols, interval, days, cfg, out_dir,
     if not all_candles:
         print("\n[HATA] Hic veri yuklenemedi.")
         return
+
+    # ── HTF Kline verisi indir (mtf.enabled ise) ──────────────
+    htf_cfg      = cfg.get("mtf", {})
+    htf_enabled  = htf_cfg.get("enabled", True)
+    htf_interval = htf_cfg.get("htf_interval", "4h")
+    all_htf_candles = {}
+
+    if htf_enabled:
+        print(f"\n  HTF veri indiriliyor ({htf_interval})...")
+        for i, sym in enumerate(symbols, 1):
+            cached = _load_cache(sym, htf_interval, days, start_date, end_date)
+            if cached is not None:
+                print(f"  [{i:2}/{len(symbols)}] {sym:<14} HTF cache ({len(cached)} mum)")
+                all_htf_candles[sym] = cached
+            else:
+                print(f"  [{i:2}/{len(symbols)}] {sym:<14} HTF indiriliyor...", end=" ", flush=True)
+                candles = fetch_klines(sym, htf_interval, start_ms, end_ms)
+                if candles:
+                    _save_cache(sym, htf_interval, days, candles, start_date, end_date)
+                    all_htf_candles[sym] = candles
+                    print(f"{len(candles)} mum")
+                else:
+                    print("veri yok, atlandi")
+        print(f"  HTF yüklendi: {len(all_htf_candles)} sembol\n")
 
     if optimize:
         run_parameter_search(symbols, interval, days, cfg,
@@ -978,10 +1043,40 @@ def run_backtest(symbols, interval, days, cfg, out_dir,
 
     bt = Backtester(cfg)
     bt._funding_map = funding_map
+
+    # ── HTF buffer'larını Backtester'a bağla ──────────────────
+    if htf_enabled and all_htf_candles:
+        from collections import deque as _deque
+        HTF_WINDOW = 500
+        for sym in all_candles:
+            bt.htf_prices[ sym] = _deque(maxlen=HTF_WINDOW)
+            bt.htf_highs[  sym] = _deque(maxlen=HTF_WINDOW)
+            bt.htf_lows[   sym] = _deque(maxlen=HTF_WINDOW)
+            bt.htf_volumes[sym] = _deque(maxlen=HTF_WINDOW)
+
+    # HTF timeline'ını önceden işle (pointer mantığı)
+    htf_timeline = {}
+    for sym, candles in all_htf_candles.items():
+        htf_timeline[sym] = [(c["open_time"], c) for c in candles]
+
+    htf_ptr     = {sym: 0 for sym in htf_timeline}
     last_prices = {}
     processed   = 0
 
     for ts, sym, candle in timeline:
+        # HTF buffer'ını güncelle: o ana kadar geçmiş HTF mumlarını ekle
+        if htf_enabled and sym in htf_timeline:
+            ptr      = htf_ptr.get(sym, 0)
+            htf_list = htf_timeline[sym]
+            while ptr < len(htf_list) and htf_list[ptr][0] <= ts:
+                hc = htf_list[ptr][1]
+                bt.htf_prices[ sym].append(hc["close"])
+                bt.htf_highs[  sym].append(hc["high"])
+                bt.htf_lows[   sym].append(hc["low"])
+                bt.htf_volumes[sym].append(hc["volume"])
+                ptr += 1
+            htf_ptr[sym] = ptr
+
         price_buf[sym].append(candle["close"])
         high_buf[sym].append(candle["high"])
         low_buf[sym].append(candle["low"])
