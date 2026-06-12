@@ -308,7 +308,7 @@ class Backtester:
         return self.daily_pnl <= -(self.equity * self.daily_loss_limit)
 
     def _get_btc_sentiment(self):
-        if len(self.btc_closes) < 210:
+        if len(self.btc_closes) < 50:
             return "NEUTRAL"
         closes = self.btc_closes[-100:]
         k20, k50 = 2 / 21, 2 / 51
@@ -467,6 +467,7 @@ class Backtester:
             age    = ts_sec - pos["ts_open"]
             mult   = 1 if pos["side"] == "LONG" else -1
             change = (price - pos["entry"]) / pos["entry"] * mult
+
 
             # SL kontrolü — TP1 sonrası breakeven'a taşınır
             if change <= -pos.get("sl_pct", self.sl_pct):
