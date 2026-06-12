@@ -842,7 +842,9 @@ def _run_timeline(bt: Backtester, timeline: list, all_candles: dict, window: int
 
 
 def run_parameter_search(symbols, interval, days, base_cfg,
-                         all_candles, start_ms, save_best_to=None, oos_split=1.0):
+                         all_candles, start_ms, save_best_to=None, oos_split=1.0,
+                         funding_map=None):
+    _opt_funding_map = funding_map or {}
     from itertools import product
     timeline = []
     for sym, candles in all_candles.items():
@@ -873,6 +875,7 @@ def run_parameter_search(symbols, interval, days, base_cfg,
         params  = dict(zip(keys, combo))
         cfg     = _build_cfg_variant(base_cfg, params)
         bt      = Backtester(cfg)
+        bt._funding_map = _opt_funding_map  # funding filter optimize'da da aktif
         lp      = _run_timeline(bt, train_tl, all_candles)
         bt.force_close_all(lp)
         t       = bt.trades
@@ -909,6 +912,7 @@ def run_parameter_search(symbols, interval, days, base_cfg,
 
     if test_tl:
         bt2 = Backtester(_build_cfg_variant(base_cfg, best["params"]))
+        bt2._funding_map = _opt_funding_map
         lp2 = _run_timeline(bt2, test_tl, all_candles)
         bt2.force_close_all(lp2)
         t2  = bt2.trades
@@ -1007,20 +1011,21 @@ def run_backtest(symbols, interval, days, cfg, out_dir,
                     print("veri yok, atlandi")
         print(f"  HTF yüklendi: {len(all_htf_candles)} sembol\n")
 
-    if optimize:
-        run_parameter_search(symbols, interval, days, cfg,
-                             all_candles, start_ms,
-                             save_best_to=save_config,
-                             oos_split=0.70 if oos else 1.0)
-        return
-
-    # ── Funding rate geçmişini çek (funding_filter açıksa) ────
     fr_cfg = cfg.get("funding_filter", {})
     funding_map = {}
     if fr_cfg.get("enabled", False):
         print(f"  BTC funding rate yükleniyor...")
         funding_map = fetch_funding_rates("BTCUSDT", start_ms, end_ms)
         print(f"  {len(funding_map)} funding kaydı yüklendi")
+
+    if optimize:
+        run_parameter_search(symbols, interval, days, cfg,
+                             all_candles, start_ms,
+                             save_best_to=save_config,
+                             oos_split=0.70 if oos else 1.0,
+                             funding_map=funding_map)
+        return
+
 
     # ── Zaman eksenini oluştur ─────────────────────────────────
     print(f"\n  Zaman ekseni olusturuluyor...")
