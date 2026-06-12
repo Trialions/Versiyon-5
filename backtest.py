@@ -125,6 +125,7 @@ def fetch_funding_rates(symbol: str, start_ms: int, end_ms: int) -> dict:
             time.sleep(REQUEST_DELAY)
         except Exception as e:
             log_error(f"Funding rate {symbol}: {e}")
+            print(f"  [UYARI] Funding rate çekilemedi: {e}")
             break
     return out
 
@@ -223,6 +224,11 @@ class Backtester:
         adx_f = cfg.get("adx_filter", {})
         self.adx_filter_enabled   = bool( adx_f.get("enabled",    False))
         self.adx_filter_threshold = float(adx_f.get("threshold",  25.0))
+
+        # ── ATR Minimum Filtresi ──────────────────────────────
+        atr_f = cfg.get("atr_filter", {})
+        self.atr_filter_enabled = bool( atr_f.get("enabled",     False))
+        self.atr_filter_min     = float(atr_f.get("min_atr_pct", 0.8))
 
         # ── Partial TP ────────────────────────────────────────
         ptp = cfg.get("partial_tp", {})
@@ -555,6 +561,12 @@ class Backtester:
         adx_val = result.get("components", {}).get("adx", 0.0)
         if self.adx_filter_enabled and adx_val > 0 and adx_val < self.adx_filter_threshold:
             return
+
+        # ── ATR Minimum Filtresi ───────────────────────────────
+        if self.atr_filter_enabled:
+            atr_val = result.get("components", {}).get("atr_pct", 0.0)
+            if atr_val < self.atr_filter_min:
+                return
 
         # ── Funding Filter (side belirlendikten sonra) ─────────
         if self.fr_enabled and self._funding_map:
@@ -1180,13 +1192,6 @@ def run_backtest(symbols, interval, days, cfg, out_dir,
                              funding_map=funding_map)
         return
 
-    # ── Funding rate geçmişini çek (funding_filter açıksa) ────
-    fr_cfg = cfg.get("funding_filter", {})
-    funding_map = {}
-    if fr_cfg.get("enabled", False):
-        print(f"  BTC funding rate yükleniyor...")
-        funding_map = fetch_funding_rates("BTCUSDT", start_ms, end_ms)
-        print(f"  {len(funding_map)} funding kaydı yüklendi")
 
     # ── Zaman eksenini oluştur ─────────────────────────────────
     print(f"\n  Zaman ekseni olusturuluyor...")
