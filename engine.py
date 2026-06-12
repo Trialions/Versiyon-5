@@ -31,6 +31,12 @@ class TradeEngine:
         self.adx_filter_enabled   = bool( adx_f.get("enabled",   True))
         self.adx_filter_threshold = float(adx_f.get("threshold", 25.0))
 
+        # ── RSI Filtresi ──────────────────────────────────────
+        rsi_f = self.cfg.get("rsi_filter", {})
+        self.rsi_filter_enabled = bool( rsi_f.get("enabled",   True))
+        self.rsi_max_long       = float(rsi_f.get("max_long",  73.0))
+        self.rsi_min_short      = float(rsi_f.get("min_short", 30.0))
+
         self.equity           = float(misc.get("starting_equity_usdt", 1000.0))
         self.tp_pct           = float(risk.get("take_profit_min_pct",  3.0)) / 100
         self.sl_pct           = float(risk.get("hard_stop_pct",        1.5)) / 100
@@ -406,6 +412,18 @@ class TradeEngine:
         adx_val = result.get("components", {}).get("adx", 0.0)
         if self.adx_filter_enabled and adx_val > 0 and adx_val < self.adx_filter_threshold:
             return
+
+        # ── RSI Filtresi ───────────────────────────────────────
+        if self.rsi_filter_enabled:
+            rsi_val = result.get("components", {}).get("rsi", 50.0)
+            if side == "LONG"  and rsi_val > self.rsi_max_long:
+                self._fire("OPEN_BLOCK", cause="RSI_TOO_HIGH",
+                           symbol=symbol, rsi=round(rsi_val, 1))
+                return
+            if side == "SHORT" and rsi_val < self.rsi_min_short:
+                self._fire("OPEN_BLOCK", cause="RSI_TOO_LOW",
+                           symbol=symbol, rsi=round(rsi_val, 1))
+                return
 
         # ── Çoklu Timeframe Konfirmasyon ─────────────────────────
         if self.mtf_enabled:
