@@ -239,9 +239,11 @@ class Backtester:
 
         # ── Quality Score ─────────────────────────────────────
         qs = cfg.get("quality_score", {})
-        self.qs_enabled  = bool( qs.get("enabled",      False))
-        self.qs_min_half = float(qs.get("min_half_pos",  5.0))
-        self.qs_min_full = float(qs.get("min_full_pos",  6.0))
+        self.qs_enabled      = bool( qs.get("enabled",      False))
+        self.qs_min_half     = float(qs.get("min_half_pos",  5.0))
+        self.qs_min_full     = float(qs.get("min_full_pos",  6.0))
+        self._qs_half_cfg    = self.qs_min_half   # config orijinali — reset için
+        self._qs_full_cfg    = self.qs_min_full
 
         # ── Adaptive Risk ─────────────────────────────────────
         ar = cfg.get("adaptive_risk", {})
@@ -364,7 +366,7 @@ class Backtester:
         score = 0
 
         # HTF uyumu +2
-        htf = self._htf_score(side) if hasattr(self, '_last_qs_symbol') else 0.0
+        htf = self._htf_score(self._last_qs_symbol) if hasattr(self, '_last_qs_symbol') else 50.0
         if side == "LONG"  and htf >= self.mtf_long_min:  score += 2
         if side == "SHORT" and htf <= self.mtf_short_max: score += 2
 
@@ -385,10 +387,10 @@ class Backtester:
         # BTC trend uyumu +2
         if self._btc_trend_ok(side): score += 2
 
-        # Rejime göre dinamik eşikleri güncelle
+        # Rejime göre dinamik eşikler
         if   regime == "TREND":   self.qs_min_half, self.qs_min_full = 4, 5
         elif regime == "BEARISH": self.qs_min_half, self.qs_min_full = 7, 9
-        else:                     self.qs_min_half, self.qs_min_full = 5, 7
+        else:                     self.qs_min_half, self.qs_min_full = self._qs_half_cfg, self._qs_full_cfg
 
         return score
 
@@ -441,16 +443,11 @@ class Backtester:
             change = (price - pos["entry"]) / pos["entry"] * mult
 
             # TP1 sonrası breakeven kontrolü
-            if pos.get("tp1_done"):
-                be_buffer = (self.commission + self.slippage) * 2
-                if change <= -be_buffer:
-                    self._close(symbol, price, change, "Breakeven", ts_ms)
-                    return
-            else:
-                if change <= -pos.get("sl_pct", self.sl_pct):
-                    self._close(symbol, price, change, "SL", ts_ms)
-                    return
-
+            # SL kontrolü — TP1 sonrası breakeven'a taşınır
+            if change <= -pos.get("sl_pct", self.sl_pct):
+                reason = "Breakeven" if pos.get("tp1_done") else "SL"
+                self._close(symbol, price, change, reason, ts_ms)
+                return
             if age >= self.max_hold_sec:
                 self._close(symbol, price, change, "MaxHold", ts_ms)
                 return
