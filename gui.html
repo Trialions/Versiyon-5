@@ -504,7 +504,8 @@ select.form-input option{background:var(--surf)}
           <input class="form-input bl-input" type="text" id="bl-sym" placeholder="Sembol (ör: BTC)">
           <input class="form-input" type="number" id="bl-hours" value="24" min="1" max="168" style="width:70px">
           <span style="font-size:10px;color:var(--muted);font-family:var(--mono)">sa</span>
-          <button class="btn green" onclick="blAdd()">Ekle</button>
+                <button class="btn green" onclick="blAdd()">Ekle</button>
+                <button class="btn" onclick="blAddPerm()">∞ Süresiz</button>
         </div>
         <table class="trade-tbl">
           <thead><tr><th>Sembol</th><th>Kalan (sa)</th><th></th></tr></thead>
@@ -1190,7 +1191,7 @@ async function loadBlacklist() {
   const bl = await pywebview.api.get_blacklist();
   const tbody = document.getElementById('bl-table-body');
   tbody.innerHTML = bl.length
-    ? bl.map(([sym,hrs]) => `<tr><td>${sym}</td><td>${hrs.toFixed(1)}</td><td><button class="btn red" style="padding:3px 8px;font-size:10px" onclick="blRemove('${sym}')">Çıkar</button></td></tr>`).join('')
+    ? bl.map(([sym,hrs]) => `<tr><td>${sym}</td><td>${hrs === -1 ? '∞' : hrs.toFixed(1)}</td><td><button class="btn red" style="padding:3px 8px;font-size:10px" onclick="blRemove('${sym}')">Çıkar</button></td></tr>`).join('')
     : '<tr><td colspan="3" style="color:var(--muted);text-align:center;padding:12px">Kara liste boş.</td></tr>';
 }
 
@@ -1199,6 +1200,14 @@ async function blAdd() {
   const hrs = parseFloat(document.getElementById('bl-hours').value);
   if (!sym) return;
   await pywebview.api.blacklist_add(sym, hrs);
+  document.getElementById('bl-sym').value = '';
+  await loadBlacklist();
+}
+
+async function blAddPerm() {
+  const sym = document.getElementById('bl-sym').value.trim();
+  if (!sym) return;
+  await pywebview.api.blacklist_add(sym, 0);
   document.getElementById('bl-sym').value = '';
   await loadBlacklist();
 }
