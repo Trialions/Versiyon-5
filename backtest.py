@@ -565,7 +565,7 @@ class Backtester:
         if self.use_atr_stop and "atr_pct" in result.get("components", {}):
             atr_pct_val = result["components"]["atr_pct"] / 100
             final_sl    = min(atr_pct_val * self.atr_multiplier, self.max_stop_pct)
-            final_sl    = max(final_sl, 0.015)
+            final_sl    = max(final_sl, 0.005)
         else:
             final_sl = self.sl_pct
 
