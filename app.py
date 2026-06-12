@@ -67,39 +67,75 @@ def _make_bt_dir(params: dict) -> str:
             risk  = cfg.get("risk", {})
             thr   = cfg.get("thresholds", {})
             m     = cfg.get("mode", {})
-            btc_f = cfg.get("btc_filter", {})
-            adx_f = cfg.get("adx_filter", {})
-            ptp   = cfg.get("partial_tp", {})
-            mtf   = cfg.get("mtf", {})
+            btc_f = cfg.get("btc_filter",     {})
+            adx_f = cfg.get("adx_filter",     {})
+            ptp   = cfg.get("partial_tp",     {})
+            mtf   = cfg.get("mtf",            {})
+            qs    = cfg.get("quality_score",  {})
+            ar    = cfg.get("adaptive_risk",  {})
+            ff    = cfg.get("funding_filter", {})
+            mr    = cfg.get("market_regime",  {})
+            lim   = cfg.get("limits",         {})
+            misc  = cfg.get("misc",           {})
         snap  = {
-            "timestamp":            time.strftime("%Y-%m-%d %H:%M:%S"),
-            "interval":             params.get("interval", "1h"),
-            "days":                 params.get("days",     30),
-            "top":                  params.get("top",      20),
-            "mode":                 params.get("mode",     "normal"),
-            "score_long_open":      thr.get("score_long_open",      85),
-            "score_short_open":     thr.get("score_short_open",     5),
-            "hard_stop_pct":        risk.get("hard_stop_pct",       2.5),
-            "take_profit_min_pct":  risk.get("take_profit_min_pct", 3.0),
-            "trailing_step_pct":    risk.get("trailing_step_pct",   1.0),
-            "atr_multiplier":       risk.get("atr_multiplier",      2.5),
-            "min_profit_close_pct": risk.get("min_profit_close_pct",2.0),
-            "use_atr_stop":         risk.get("use_atr_stop",        True),
-            "max_stop_pct":         risk.get("max_stop_pct",        4.5),
-            "btc_filter_enabled":   btc_f.get("enabled",           True),
-            "btc_filter_lookback":  btc_f.get("lookback_candles",     4),
-            "btc_filter_drop_pct":  btc_f.get("drop_pct",           1.5),
-            "adx_filter_enabled":   adx_f.get("enabled",          False),
-            "adx_filter_threshold": adx_f.get("threshold",         25.0),
-            "partial_tp_enabled":   ptp.get("enabled",             True),
-            "partial_tp_r_mult":    ptp.get("tp1_r_mult",          0.75),
-            "partial_tp_close_pct": ptp.get("close_pct",           0.50),
-            "mtf_enabled":            mtf.get("enabled",           True),
-            "htf_long_min":           mtf.get("htf_long_min",      55.0),
-            "htf_short_max":          mtf.get("htf_short_max",     45.0),
-            "htf_interval":           mtf.get("htf_interval",      "1h"),
-            "risk_per_trade_pct":     risk.get("risk_per_trade_pct", 1.0),
-            "min_hold_minutes":       risk.get("min_hold_minutes",   30),
+            "timestamp":              time.strftime("%Y-%m-%d %H:%M:%S"),
+            "interval":               params.get("interval", "1h"),
+            "days":                   params.get("days",     30),
+            "top":                    params.get("top",      20),
+            "mode":                   params.get("mode",     "normal"),
+            # Risk
+            "score_long_open":        thr.get("score_long_open",       85),
+            "score_short_open":       thr.get("score_short_open",       5),
+            "hard_stop_pct":          risk.get("hard_stop_pct",        2.5),
+            "take_profit_min_pct":    risk.get("take_profit_min_pct",  3.0),
+            "trailing_step_pct":      risk.get("trailing_step_pct",    1.0),
+            "atr_multiplier":         risk.get("atr_multiplier",       2.5),
+            "min_profit_close_pct":   risk.get("min_profit_close_pct", 2.0),
+            "use_atr_stop":           risk.get("use_atr_stop",         True),
+            "max_stop_pct":           risk.get("max_stop_pct",         4.5),
+            "risk_per_trade_pct":     risk.get("risk_per_trade_pct",   1.0),
+            "min_hold_minutes":       risk.get("min_hold_minutes",      60),
+            # Limitler
+            "max_open_positions":     lim.get("max_open_positions",     3),
+            "max_trades_per_day":     lim.get("max_trades_per_day",     8),
+            "daily_target_pct":       lim.get("daily_target_pct",      10),
+            "daily_loss_limit_pct":   lim.get("daily_loss_limit_pct",   3),
+            "max_hold_hours":         lim.get("max_hold_hours",         48),
+            # Filtreler
+            "btc_filter_enabled":     btc_f.get("enabled",            True),
+            "btc_filter_lookback":    btc_f.get("lookback_candles",      4),
+            "btc_filter_drop_pct":    btc_f.get("drop_pct",            1.5),
+            "adx_filter_enabled":     adx_f.get("enabled",           False),
+            "adx_filter_threshold":   adx_f.get("threshold",          25.0),
+            # Partial TP
+            "partial_tp_enabled":     ptp.get("enabled",              True),
+            "partial_tp_r_mult":      ptp.get("tp1_r_mult",           0.75),
+            "partial_tp_close_pct":   ptp.get("close_pct",            0.50),
+            # MTF
+            "mtf_enabled":            mtf.get("enabled",              True),
+            "htf_long_min":           mtf.get("htf_long_min",         55.0),
+            "htf_short_max":          mtf.get("htf_short_max",        45.0),
+            "htf_interval":           mtf.get("htf_interval",         "1h"),
+            # Quality Score
+            "qs_enabled":             qs.get("enabled",               True),
+            "qs_min_half_pos":        qs.get("min_half_pos",           5.0),
+            "qs_min_full_pos":        qs.get("min_full_pos",           7.0),
+            # Adaptive Risk
+            "ar_enabled":             ar.get("enabled",               True),
+            "ar_loss3_mult":          ar.get("loss3_mult",            0.75),
+            "ar_loss5_mult":          ar.get("loss5_mult",            0.50),
+            "ar_loss8_mult":          ar.get("loss8_mult",            0.25),
+            # Funding Filter
+            "ff_enabled":             ff.get("enabled",               True),
+            "ff_long_max":            ff.get("long_max",             0.0005),
+            "ff_short_min":           ff.get("short_min",           -0.0005),
+            # Market Regime
+            "mr_enabled":             mr.get("enabled",               True),
+            # Misc
+            "volume_burst_multiplier": misc.get("volume_burst_multiplier", 2.0),
+            "min_notional_usdt":       misc.get("min_notional_usdt", 30000),
+            "commission_pct":          misc.get("commission_pct",     0.04),
+            "slippage_pct":            misc.get("slippage_pct",       0.03),
         }
         snap_path = os.path.join(path, "config_snapshot.json")
         with open(snap_path, "w", encoding="utf-8") as f:
