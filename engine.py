@@ -4,14 +4,22 @@
 #   2. htf_close_series / htf_high_series / htf_low_series / htf_vol_series eklendi
 #   3. seed_from_candles_htf() ve on_candle_htf() eklendi
 #   4. _try_open'da HTF konfirmasyon şartı: 5m ve 1h aynı yönü göstermeli
+# DEĞİŞİKLİKLER v6→v7 (adaptive_sl):
+#   5. adaptive_sl modülü entegre edildi
+#   6. _open(): SL mesafesi rejime göre dinamik (TREND geniş, KONSOL normal)
+#   7. _try_open(): giriş score eşiği rejime göre otomatik ayarlanıyor
+#   8. _manage() / _exit_reason(): trail_step pozisyona özel (rejim anında saklanır)
 import time
 import csv
 import threading
 from collections import deque
 from pathlib import Path
 
+import adaptive_sl
 from strategy_core import score_symbol
 from data_macro import get_market_sentiment, get_sentiment_score
+from market_regime import MarketRegimeDetector
+from symbol_manager import SymbolManager
 from logger import log_info, log_error, log_event
 
 
@@ -99,6 +107,10 @@ class TradeEngine:
         self.daily_pnl_usd     = 0.0
         self._daily_fired      = False
         self.last_reset_day    = time.strftime("%Y-%m-%d")
+
+        # ── Piyasa Rejimi + Sembol Yöneticisi ────────────────────
+        self.regime  = MarketRegimeDetector(cfg)
+        self.sym_mgr = SymbolManager(cfg, starting_equity=self.equity)
 
         # ── Kara Liste ────────────────────────────────────────────
         self.blacklist: dict[str, float] = {}
@@ -327,8 +339,10 @@ class TradeEngine:
             return
 
         if self.trail and change > 0:
+            # Pozisyona özgü trail_step kullan (açılışta rejime göre belirlendi)
+            pos_trail    = pos.get("trail_step", self.trail_step)
             trail_locked = pos.get("trail_locked", None)
-            if trail_locked is None or change > trail_locked + self.trail_step:
+            if trail_locked is None or change > trail_locked + pos_trail:
                 pos["trail_locked"] = change
                 self._fire("TRAIL_LOCK", symbol=symbol,
                            locked=f"{change*100:.2f}%")
@@ -356,7 +370,9 @@ class TradeEngine:
             if pos["side"] == "SHORT" and score > self.score_close:
                 return "ScoreClose"
             locked = pos.get("trail_locked", change)
-            if self.trail and change < locked - self.trail_step:
+            # Pozisyona özgü trail_step (açılışta rejime göre belirlendi)
+            pos_trail = pos.get("trail_step", self.trail_step)
+            if self.trail and change < locked - pos_trail:
                 return "Trail"
         return None
 
@@ -406,8 +422,18 @@ class TradeEngine:
 
         # Makro sentiment filtresi
         sentiment = get_market_sentiment()
+        # Adaptif giriş eşiği: KONSOL'de +7, BEARISH'de +99 (pratikte giriş yok)
+        _adsl_thr = adaptive_sl.compute(
+            regime               = self.regime._last_regime,
+            atr_pct              = result.get("components", {}).get("atr_pct", 0.0),
+            base_score_threshold = self.score_long_open,
+            base_atr_multiplier  = self.atr_multiplier,
+            base_trail_step      = self.trail_step,
+            cfg                  = self.cfg,
+        )
+        effective_long_thr = _adsl_thr["score_threshold"]
         side      = None
-        if score >= self.score_long_open and sentiment != "BEARISH":
+        if score >= effective_long_thr and sentiment != "BEARISH":
             side = "LONG"
         elif score <= self.score_short_open and sentiment != "BULLISH":
             side = "SHORT"
@@ -450,33 +476,48 @@ class TradeEngine:
                            symbol=symbol, htf_score=round(htf_sc, 1))
                 return
 
-        self._open(symbol, price, side, result)
+        # Sembol performans filtresi
+        sym_mult = self.sym_mgr.size_multiplier(symbol)
+        if sym_mult == 0:
+            return  # tamamen baskılanmış sembol
+
+        self._open(symbol, price, side, result, size_mult=sym_mult)
 
     # ──────────────────────────────────────────────────────────────
     # Pozisyon Aç / Kapat
     # ──────────────────────────────────────────────────────────────
-    def _open(self, symbol: str, price: float, side: str, result: dict):
-        if self.use_atr_stop and "components" in result and "atr_pct" in result["components"]:
-            atr_pct_val  = result["components"]["atr_pct"] / 100
-            dynamic_sl   = atr_pct_val * self.atr_multiplier
-            final_sl_pct = min(dynamic_sl, self.max_stop_pct)
-            final_sl_pct = max(final_sl_pct, 0.005)
+    def _open(self, symbol: str, price: float, side: str, result: dict, size_mult: float = 1.0):
+        # Adaptif SL: ATR × rejime özgü çarpan
+        atr_pct_val = result.get("components", {}).get("atr_pct", 0.0)
+        regime      = self.regime._last_regime
+        adsl = adaptive_sl.compute(
+            regime               = regime,
+            atr_pct              = atr_pct_val,
+            base_score_threshold = self.score_long_open,
+            base_atr_multiplier  = self.atr_multiplier,
+            base_trail_step      = self.trail_step,
+            cfg                  = self.cfg,
+        )
+        if self.use_atr_stop and atr_pct_val > 0:
+            final_sl_pct = adsl["sl_pct"]
         else:
             final_sl_pct = self.sl_pct
+        pos_trail_step = adsl["trail_step"]
 
-        qty = self._lot(price, dynamic_sl_pct=final_sl_pct)
+        qty = self._lot(price, dynamic_sl_pct=final_sl_pct) * size_mult
         self.open_positions[symbol] = {
-            "side":    side,
-            "entry":   price,
-            "qty":     qty,
-            "ts_open": time.time(),
-            "sl_pct":  final_sl_pct,
+            "side":       side,
+            "entry":      price,
+            "qty":        qty,
+            "ts_open":    time.time(),
+            "sl_pct":     final_sl_pct,
+            "trail_step": pos_trail_step,   # rejime göre belirlendi
         }
         self.trade_count_today += 1
         self._log_trade(symbol, side, qty, price, "", 0.0, 0.0,
-                        f"OPEN sl_pct={final_sl_pct*100:.2f}% score={result['final_score']}")
+                        f"OPEN sl_pct={final_sl_pct*100:.2f}% regime={regime} score={result['final_score']}")
         self._fire("OPEN", symbol=symbol, side=side,
-                   entry=price, score=result["final_score"])
+                   entry=price, score=result["final_score"], regime=regime)
 
     def _close(self, symbol: str, price: float, change_pct: float, reason: str):
         pos = self.open_positions.pop(symbol, None)
@@ -489,6 +530,8 @@ class TradeEngine:
 
         self.pnl_total_usd += pnl_usd
         self.daily_pnl_usd += pnl_usd
+        self.sym_mgr.record_trade(symbol, pnl_usd)
+        self.sym_mgr.update_equity(self.equity + self.pnl_total_usd)
 
         self._log_trade(symbol, pos["side"], qty, entry, price,
                         round(change_pct * 100, 3), round(pnl_usd, 3), reason)
