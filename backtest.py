@@ -10,6 +10,15 @@
 # YENİLİKLER v7→v8:
 #   - HTF/MTF entegrasyonu: backtest motoru artık gerçek 4h veri çekip MTF filtresi uyguluyor
 #   - htf_score artık trade kayıtlarında 0.0 değil, gerçek HTF skorunu gösteriyor
+# YENİLİKLER v8→v9 (adaptive_sl):
+#   - adaptive_sl modülü entegre edildi
+#   - Giriş eşiği rejime göre dinamik (KONSOL +7, BEARISH pratik engel)
+#   - SL mesafesi rejime göre dinamik ATR çarpanı (TREND ×3.2, KONSOL ×2.5)
+#   - trail_step pozisyona özel olarak saklanır (TREND %2.0, KONSOL %1.5)
+# YENİLİKLER v9→v10 (filter_events log):
+#   - Backtester.block_log: her bloke edilen giriş nedeniyle kaydedilir
+#   - generate_report(): backtest bitişinde filter_events.csv yazılır
+#   - Hangi filtrenin kaç trade kestiği özet olarak raporlanır
 import time
 import csv
 import json
@@ -25,6 +34,7 @@ from strategy_core import score_symbol
 from logger import log_info, log_error
 from symbol_manager import SymbolManager
 from market_regime import MarketRegimeDetector
+import adaptive_sl
 
 import os as _os
 _SCRIPT_DIR = _os.path.dirname(_os.path.abspath(__file__))
@@ -177,6 +187,7 @@ def _sharpe(equity_curve, risk_free=0.0):
 
 class Backtester:
     def __init__(self, cfg: dict):
+        self.cfg  = cfg   # adaptive_sl.compute'a iletilecek
         risk  = cfg.get("risk",       {})
         lim   = cfg.get("limits",     {})
         thr   = cfg.get("thresholds", {})
@@ -270,7 +281,7 @@ class Backtester:
         self.htf_volumes = {}
 
         # ── Modüller ──────────────────────────────────────────
-        self.sym_mgr = SymbolManager(cfg)
+        self.sym_mgr = SymbolManager(cfg, starting_equity=self.starting_equity)
         self.regime  = MarketRegimeDetector(cfg)
 
         # ── State ─────────────────────────────────────────────
@@ -284,6 +295,7 @@ class Backtester:
         self.equity_curve     = [(0, self.starting_equity)]
         self.consec_losses    = 0   # adaptive_risk için ardışık kayıp sayacı
         self.sl_records       = []  # SL post-analysis için ham kayıtlar
+        self.block_log        = []  # filter_events: bloke edilen her giriş kaydı
 
     # ──────────────────────────────────────────────────────────
     # Yardımcı Metodlar
@@ -413,7 +425,9 @@ class Backtester:
             if pos["side"] == "SHORT" and score > self.score_close:
                 return "ScoreClose"
             locked = pos.get("trail_locked")
-            if self.trail and locked is not None and change < locked - self.trail_step:
+            # Pozisyona özgü trail_step (açılışta rejime göre belirlendi)
+            pos_trail = pos.get("trail_step", self.trail_step)
+            if self.trail and locked is not None and change < locked - pos_trail:
                 return "Trail"
         return None
 
@@ -502,8 +516,10 @@ class Backtester:
                     return
 
             if self.trail and change > 0:
+                # Pozisyona özgü trail_step kullan
+                pos_trail = pos.get("trail_step", self.trail_step)
                 locked = pos.get("trail_locked")
-                if locked is None or change > locked + self.trail_step:
+                if locked is None or change > locked + pos_trail:
                     pos["trail_locked"] = change
 
             if age >= self.min_hold:
@@ -516,71 +532,108 @@ class Backtester:
         if not self.regime.enabled:
             pass  # modül kapalı → kontrol yok
         elif not self.regime.is_open():
+            self.block_log.append({"time": datetime.utcfromtimestamp(ts_sec).strftime("%Y-%m-%d %H:%M"), "symbol": symbol, "score": round(score, 1), "cause": "REGIME_CLOSED", "regime": self.regime._last_regime, "detail": ""})
             return
-        if len(self.btc_closes) < 50:                    return  # yeterli BTC verisi yok
-        if len(self.open_positions) >= self.max_open_pos: return
-        if self.trade_count_day >= self.max_trades_day:   return
-        if self._daily_target_hit():                      return
-        if self._daily_loss_hit():                        return
+        if len(self.btc_closes) < 50:
+            return  # yeterli BTC verisi yok — log tutmaya gerek yok
+        if len(self.open_positions) >= self.max_open_pos:
+            self.block_log.append({"time": datetime.utcfromtimestamp(ts_sec).strftime("%Y-%m-%d %H:%M"), "symbol": symbol, "score": round(score, 1), "cause": "MAX_POSITIONS", "regime": self.regime._last_regime, "detail": f"open={len(self.open_positions)}"})
+            return
+        if self.trade_count_day >= self.max_trades_day:
+            self.block_log.append({"time": datetime.utcfromtimestamp(ts_sec).strftime("%Y-%m-%d %H:%M"), "symbol": symbol, "score": round(score, 1), "cause": "MAX_TRADES_DAY", "regime": self.regime._last_regime, "detail": f"count={self.trade_count_day}"})
+            return
+        if self._daily_target_hit():
+            self.block_log.append({"time": datetime.utcfromtimestamp(ts_sec).strftime("%Y-%m-%d %H:%M"), "symbol": symbol, "score": round(score, 1), "cause": "DAILY_TARGET_HIT", "regime": self.regime._last_regime, "detail": ""})
+            return
+        if self._daily_loss_hit():
+            self.block_log.append({"time": datetime.utcfromtimestamp(ts_sec).strftime("%Y-%m-%d %H:%M"), "symbol": symbol, "score": round(score, 1), "cause": "DAILY_LOSS_HIT", "regime": self.regime._last_regime, "detail": ""})
+            return
 
         if len(prices) >= 20:
             if (sum(prices[-20:]) / 20) * (sum(volumes[-20:]) / 20) < self.min_notional:
+                self.block_log.append({"time": datetime.utcfromtimestamp(ts_sec).strftime("%Y-%m-%d %H:%M"), "symbol": symbol, "score": round(score, 1), "cause": "LOW_NOTIONAL", "regime": self.regime._last_regime, "detail": ""})
                 return
 
         if len(volumes) >= 20:
             rv = sum(volumes[-3:]) / 3
             hv = sum(volumes[-20:-3]) / 17
             if hv > 0 and rv < hv * self.vol_mult:
+                self.block_log.append({"time": datetime.utcfromtimestamp(ts_sec).strftime("%Y-%m-%d %H:%M"), "symbol": symbol, "score": round(score, 1), "cause": "LOW_VOLUME", "regime": self.regime._last_regime, "detail": f"rv={rv:.0f} hv={hv:.0f}"})
                 return
 
         btc = self.open_positions.get("BTCUSDT")
         if btc:
-            if btc["side"] == "SHORT" and score >= self.score_long_open:  return
+            if btc["side"] == "SHORT" and score >= self.score_long_open:
+                self.block_log.append({"time": datetime.utcfromtimestamp(ts_sec).strftime("%Y-%m-%d %H:%M"), "symbol": symbol, "score": round(score, 1), "cause": "BTC_SHORT_BLOCKS_LONG", "regime": self.regime._last_regime, "detail": ""})
+                return
             if btc["side"] == "LONG"  and score <= self.score_short_open:
-                if score > self.score_short_open / 2: return
+                if score > self.score_short_open / 2:
+                    self.block_log.append({"time": datetime.utcfromtimestamp(ts_sec).strftime("%Y-%m-%d %H:%M"), "symbol": symbol, "score": round(score, 1), "cause": "BTC_LONG_BLOCKS_SHORT", "regime": self.regime._last_regime, "detail": ""})
+                    return
 
         sentiment = self._get_btc_sentiment()
         side = None
-        if score >= self.score_long_open and sentiment != "BEARISH":
+        # Adaptif giriş eşiği: KONSOL'de +7, BEARISH'de +99 (pratikte giriş yok)
+        _adsl = adaptive_sl.compute(
+            regime               = self.regime._last_regime,
+            atr_pct              = result.get("components", {}).get("atr_pct", 0.0),
+            base_score_threshold = self.score_long_open,
+            base_atr_multiplier  = self.atr_multiplier,
+            base_trail_step      = self.trail_step,
+            cfg                  = self.cfg,
+        )
+        effective_long_thr = _adsl["score_threshold"]
+        if score >= effective_long_thr and sentiment != "BEARISH":
             side = "LONG"
         elif self.score_short_open < 100 and score <= self.score_short_open and sentiment != "BULLISH":
             side = "SHORT"
         if not side:
+            self.block_log.append({"time": datetime.utcfromtimestamp(ts_sec).strftime("%Y-%m-%d %H:%M"), "symbol": symbol, "score": round(score, 1), "cause": "SCORE_THRESHOLD", "regime": self.regime._last_regime, "detail": f"score={score:.1f} thr={effective_long_thr:.1f} sentiment={sentiment}"})
             return
         if not self._btc_trend_ok(side):
+            self.block_log.append({"time": datetime.utcfromtimestamp(ts_sec).strftime("%Y-%m-%d %H:%M"), "symbol": symbol, "score": round(score, 1), "cause": "BTC_TREND_FILTER", "regime": self.regime._last_regime, "detail": f"side={side}"})
             return
 
         # ── MTF / HTF Konfirmasyon ─────────────────────────────
         if self.mtf_enabled:
             htf_sc = self._htf_score(symbol)
             if side == "LONG"  and htf_sc < self.mtf_long_min:
+                self.block_log.append({"time": datetime.utcfromtimestamp(ts_sec).strftime("%Y-%m-%d %H:%M"), "symbol": symbol, "score": round(score, 1), "cause": "MTF_NO_CONFIRM", "regime": self.regime._last_regime, "detail": f"htf={htf_sc:.1f} min={self.mtf_long_min}"})
                 return
             if side == "SHORT" and htf_sc > self.mtf_short_max:
+                self.block_log.append({"time": datetime.utcfromtimestamp(ts_sec).strftime("%Y-%m-%d %H:%M"), "symbol": symbol, "score": round(score, 1), "cause": "MTF_NO_CONFIRM", "regime": self.regime._last_regime, "detail": f"htf={htf_sc:.1f} max={self.mtf_short_max}"})
                 return
 
         adx_val = result.get("components", {}).get("adx", 0.0)
         if self.adx_filter_enabled and adx_val > 0 and adx_val < self.adx_filter_threshold:
+            self.block_log.append({"time": datetime.utcfromtimestamp(ts_sec).strftime("%Y-%m-%d %H:%M"), "symbol": symbol, "score": round(score, 1), "cause": "ADX_FILTER", "regime": self.regime._last_regime, "detail": f"adx={adx_val:.1f} thr={self.adx_filter_threshold}"})
             return
 
         # ── ATR Minimum Filtresi ───────────────────────────────
         if self.atr_filter_enabled:
             atr_val = result.get("components", {}).get("atr_pct", 0.0)
             if atr_val < self.atr_filter_min:
+                self.block_log.append({"time": datetime.utcfromtimestamp(ts_sec).strftime("%Y-%m-%d %H:%M"), "symbol": symbol, "score": round(score, 1), "cause": "ATR_TOO_LOW", "regime": self.regime._last_regime, "detail": f"atr={atr_val:.3f} min={self.atr_filter_min}"})
                 return
 
         # ── Funding Filter (side belirlendikten sonra) ─────────
         if self.fr_enabled and self._funding_map:
             fr_rate = _get_funding_at(self._funding_map, ts_ms)
-            if side == "LONG"  and fr_rate >  self.fr_long_max:  return
-            if side == "SHORT" and fr_rate <  self.fr_short_min: return
+            if side == "LONG"  and fr_rate >  self.fr_long_max:
+                self.block_log.append({"time": datetime.utcfromtimestamp(ts_sec).strftime("%Y-%m-%d %H:%M"), "symbol": symbol, "score": round(score, 1), "cause": "FUNDING_FILTER", "regime": self.regime._last_regime, "detail": f"rate={fr_rate:.6f} max={self.fr_long_max}"})
+                return
+            if side == "SHORT" and fr_rate <  self.fr_short_min:
+                self.block_log.append({"time": datetime.utcfromtimestamp(ts_sec).strftime("%Y-%m-%d %H:%M"), "symbol": symbol, "score": round(score, 1), "cause": "FUNDING_FILTER", "regime": self.regime._last_regime, "detail": f"rate={fr_rate:.6f} min={self.fr_short_min}"})
+                return
 
-        # ── ATR Stop Hesapla ───────────────────────────────────
-        if self.use_atr_stop and "atr_pct" in result.get("components", {}):
-            atr_pct_val = result["components"]["atr_pct"] / 100
-            final_sl    = min(atr_pct_val * self.atr_multiplier, self.max_stop_pct)
-            final_sl    = max(final_sl, 0.005)
+        # ── Adaptif ATR Stop Hesapla ───────────────────────────
+        # _adsl yukarıda hesaplandı (giriş eşiğiyle aynı compute çağrısı)
+        atr_pct_val = result.get("components", {}).get("atr_pct", 0.0)
+        if self.use_atr_stop and atr_pct_val > 0:
+            final_sl = _adsl["sl_pct"]
         else:
             final_sl = self.sl_pct
+        pos_trail_step = _adsl["trail_step"]
 
         # ── Quality Score Filtresi ─────────────────────────────
         qs_pts = 0
@@ -588,6 +641,7 @@ class Backtester:
             self._last_qs_symbol = symbol
             qs_pts = self._quality_score(result, side)
             if qs_pts < self.qs_min_half:
+                self.block_log.append({"time": datetime.utcfromtimestamp(ts_sec).strftime("%Y-%m-%d %H:%M"), "symbol": symbol, "score": round(score, 1), "cause": "QUALITY_SCORE", "regime": self.regime._last_regime, "detail": f"qs={qs_pts} min_half={self.qs_min_half}"})
                 return   # kalite çok düşük → işlem yok
             qs_size_mult = 1.0 if qs_pts >= self.qs_min_full else 0.5
         else:
@@ -623,6 +677,7 @@ class Backtester:
             "entry":        price,
             "qty":          qty,
             "sl_pct":       final_sl,
+            "trail_step":   pos_trail_step,   # rejime göre belirlendi
             "ts_open":      ts_sec,
             "score":        score,
             "atr_pct":      round(comp.get("atr_pct",  0.0), 3),
@@ -697,7 +752,7 @@ class Backtester:
 
         if not partial:
             self.sym_mgr.record_trade(symbol, net)
-            # Adaptive risk sayacı güncelle
+            self.sym_mgr.update_equity(self.equity)
             if net < 0:
                 self.consec_losses += 1
             else:
@@ -718,7 +773,7 @@ class Backtester:
 
 def generate_report(trades, starting_equity, final_equity,
                     equity_curve, out_dir, label="",
-                    sl_records=None, all_candles=None):
+                    sl_records=None, all_candles=None, block_log=None):
     out_dir.mkdir(parents=True, exist_ok=True)
     if not trades:
         print("\n[UYARI] Hiç işlem oluşmadı. Parametreleri gevşet.")
@@ -852,6 +907,34 @@ def generate_report(trades, starting_equity, final_equity,
         ])
     print(f"  Özet raporu      : {s_csv}")
     print(sep)
+
+    # ── Filter Events CSV ─────────────────────────────────────
+    if block_log:
+        fe_csv = out_dir / "filter_events.csv"
+        fe_fields = ["time", "symbol", "score", "cause", "regime", "detail"]
+        with open(fe_csv, "w", newline="", encoding="utf-8-sig") as f:
+            w = csv.DictWriter(f, fieldnames=fe_fields, delimiter=";",
+                               extrasaction="ignore")
+            w.writeheader()
+            w.writerows(block_log)
+
+        # Özet: cause bazında sayım
+        from collections import Counter
+        cause_counts = Counter(r["cause"] for r in block_log)
+        total_blocks = len(block_log)
+        print(f"\n  FİLTRE BLOKLARI  : {fe_csv}")
+        print(f"  Toplam bloke     : {total_blocks}")
+        for cause, cnt in sorted(cause_counts.items(), key=lambda x: -x[1]):
+            print(f"    {cause:<25}: {cnt:5d}  (%{cnt/total_blocks*100:.1f})")
+
+        # Rejim bazında SCORE_THRESHOLD bloğu özeti
+        st_blocks = [r for r in block_log if r["cause"] == "SCORE_THRESHOLD"]
+        if st_blocks:
+            regime_st = Counter(r["regime"] for r in st_blocks)
+            print(f"\n  SCORE_THRESHOLD rejim dağılımı:")
+            for reg, cnt in sorted(regime_st.items(), key=lambda x: -x[1]):
+                print(f"    {reg:<10}: {cnt} bloke")
+        print(sep)
 
     # ── SL Post-Analysis ──────────────────────────────────────
     if sl_records and all_candles:
@@ -1265,7 +1348,8 @@ def run_backtest(symbols, interval, days, cfg, out_dir,
     generate_report(bt.trades, bt.starting_equity, bt.equity,
                     bt.equity_curve, out_dir,
                     sl_records=bt.sl_records,
-                    all_candles=all_candles)
+                    all_candles=all_candles,
+                    block_log=bt.block_log)
 
 
 # ──────────────────────────────────────────────────────────────
